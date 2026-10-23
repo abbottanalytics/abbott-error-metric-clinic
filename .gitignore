@@ -1,0 +1,9 @@
+# Generated predictions and profile banks: rebuild with
+#   python3 metric_clinic_kdd98.py
+#   python3 metric_clinic_kdd98_target_d.py
+data/*.npz
+
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
