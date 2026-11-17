@@ -21,7 +21,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from metric_clinic_metrics import (FAMILIES, BusinessSpec, agreement_matrix, choose, cumulative_curves,
+from metric_clinic_metrics import (FAMILIES, record_costs, BusinessSpec, agreement_matrix, choose, cumulative_curves,
                                    decile_table, evaluate, metric, metrics_for, rank,
                                    regret_by_metric, roc_points)
 from metric_clinic_kdd98 import DEFAULT_OUT as KDD98_PATH, DEFAULT_PROFILES as KDD98_PROFILES
@@ -60,8 +60,9 @@ POP_KEYS = {"task": "pop_task", "n": "pop_n", "target_name": "pop_target",
             "nonzero_rate": "pop_nonzero"}
 MODEL_KEYS = {"n_models": "m_n", "auc": "m_auc", "concentration": "m_conc",
               "value_tilt": "m_tilt", "calib_bias": "m_calib", "corr": "m_corr",
-              "hetero": "m_het", "shrink": "m_shrink", "bias": "m_bias", "strength": "m_strength"}
-BIZ_KEYS = {"cost": "b_cost", "top_pct": "b_top", "top_n": "b_topn", "gain_target": "b_gain",
+              "hetero": "m_het", "shrink": "m_shrink", "bias": "m_bias", "strength": "m_strength",
+              "scale": "m_scale"}
+BIZ_KEYS = {"cost": "b_cost", "cost_cv": "b_cost_cv", "top_pct": "b_top", "top_n": "b_topn", "gain_target": "b_gain",
             "threshold": "b_thr"}
 
 
@@ -107,7 +108,7 @@ def apply_preset():
 EXTRA_KEYS = ["preset", "pop_usd", "m_mode", "m_palgos", "select_by", "judge_by",
               "pop_seed", "model_seed"]
 SETTING_KEYS = [*POP_KEYS.values(), *MODEL_KEYS.values(), *BIZ_KEYS.values(), *EXTRA_KEYS]
-RANGE_KEYS = {k_ for k_ in MODEL_KEYS.values() if k_ != "m_n"}
+RANGE_KEYS = {k_ for k_ in MODEL_KEYS.values() if k_ not in ("m_n", "m_scale")}
 
 
 def current_settings():
@@ -272,12 +273,20 @@ USD_KEYS = {"value_top", "profit_top", "profit_topn", "roi_top", "profit_max", "
 PAGES = ["① Population", "② Model behavior", "③ Business success",
          "④ Real: who responds", "⑤ Real: gift amount"]
 st.session_state.setdefault("page", PAGES[0])
-st.radio("Page", PAGES, key="page", horizontal=True, label_visibility="collapsed")
+with st.container(key="page_nav"):
+    st.radio("Page", PAGES, key="page", horizontal=True, label_visibility="collapsed")
 _page_keys = ["pg_pop", "pg_models", "pg_biz", "pg_real", "pg_real_d"]
 st.markdown("<style>" + "".join(
     f".st-key-{k_} {{display: none;}}" for k_, p_ in zip(_page_keys, PAGES)
-    if p_ != st.session_state.page) + "</style>", unsafe_allow_html=True)
-st.divider()
+    if p_ != st.session_state.page) + """
+/* room below Streamlit's header so the page buttons aren't clipped */
+.block-container { padding-top: 3.5rem; }
+/* the page buttons read as a tab bar */
+.st-key-page_nav { border-bottom: 1px solid rgba(128,128,128,0.35); padding-bottom: 0.4rem; }
+.st-key-page_nav label p { font-size: 1.05rem; }
+/* this style block itself takes no space */
+[data-testid="stElementContainer"]:has(style) { display: none; }
+</style>""", unsafe_allow_html=True)
 tab_pop, tab_models, tab_biz, tab_real, tab_real_d = [st.container(key=k_) for k_ in _page_keys]
 
 
@@ -296,14 +305,7 @@ with tab_pop:
         if is_cls:
             st.number_input("% of records that are 1s", 0.1, 60.0, step=0.5, key="pop_prev",
                             format="%.1f", disabled=frozen)
-            st.checkbox("Dollars matter (each 1 has a $ value)", key="pop_usd", disabled=frozen,
-                        help="Off: the business only counts 1s (e.g. how many frauds land in the "
-                             "100 cases we can investigate). Profit, ROI and %-of-$ metrics are hidden.")
-            if st.session_state.pop_usd:
-                st.number_input("Average $ value of a 1", 0.0, 1e7, step=1.0, key="pop_vmean",
-                                disabled=frozen)
-                st.slider("Spread of that value (CV; 0 = every 1 worth the same)", 0.0, 3.0,
-                          step=0.1, key="pop_vcv", disabled=frozen)
+            st.caption("Dollar benefit and cost are set on ③ Business success.")
         else:
             st.selectbox("Shape of the target", ["normal", "lognormal", "zero_inflated"],
                          key="pop_shape", disabled=frozen,
@@ -376,6 +378,15 @@ with tab_models:
                       help="Shifts every probability up or down. Ranking unchanged, so AUC, lift and "
                            "gains are identical; accuracy, precision, recall, log loss are not.")
         if not use_profiles and not is_cls:
+            if st.session_state.pop_shape != "normal":
+                st.radio("Models are built on", ["log", "raw", "mixed"], key="m_scale", horizontal=True,
+                         format_func={"log": "log(1 + $)", "raw": "raw $",
+                                      "mixed": "mixed (half each)"}.get,
+                         help="log(1 + $): like a model fit on the log of the target and "
+                              "back-transformed -- tames the big values, under-predicts them. "
+                              "raw $: like least squares on dollars -- chases the big values, "
+                              "can predict below 0. The correlation below is measured on that "
+                              "scale. Mixed puts both kinds in the same race.")
             st.slider("Ranking strength (correlation)", 0.05, 0.99, step=0.01, key="m_corr")
             st.slider("Where errors fall (− precise on high values, + noisy on high values)",
                       -0.95, 0.95, step=0.05, key="m_het",
@@ -390,7 +401,9 @@ with tab_models:
 # Tab 3 -- business inputs
 # ----------------------------------------------------------------------------
 
-keys = [m.key for m in metrics_for(task) if use_usd or m.key not in USD_KEYS]
+# metrics that make no sense right now: $ metrics without dollars, ROI with nothing spent
+HIDDEN = (set() if use_usd else set(USD_KEYS)) | ({"roi_top"} if st.session_state.get("b_cost", 1) <= 0 else set())
+keys = [m.key for m in metrics_for(task) if m.key not in HIDDEN]
 for k, fallback in (("select_by", keys[0]),
                     ("judge_by", "profit_max" if use_usd else "precision_topn")):
     if st.session_state.get(k) not in keys:
@@ -402,7 +415,8 @@ def s_prev_rate():
 
 
 def biz_from_state():
-    return BusinessSpec(cost=st.session_state.b_cost, top_pct=st.session_state.b_top / 100,
+    return BusinessSpec(cost=st.session_state.b_cost, cost_cv=st.session_state.get("b_cost_cv", 0.0),
+                        top_pct=st.session_state.b_top / 100,
                         top_n=int(st.session_state.b_topn), gain_target=st.session_state.b_gain / 100,
                         threshold=st.session_state.b_thr)
 
@@ -417,26 +431,60 @@ with tab_biz:
     if st.session_state.select_by == st.session_state.judge_by:
         st.info("You're selecting and judging by the same metric, so there's nothing to lose. "
                 "Pick what the business actually values in the right-hand box.")
+    # ---- Economics: what a 1 is worth and what acting costs, in one place
+    with st.container(border=True):
+        st.markdown("**Economics**")
+        if is_cls:
+            st.checkbox("Dollars matter", key="pop_usd",
+                        help="Off: the business only counts 1s (e.g. how many frauds land in the "
+                             "100 cases we can investigate). Profit, ROI and %-of-$ metrics are hidden.")
+        if use_usd:
+            e = st.columns(5 if is_cls else 3)
+            if is_cls:
+                e[0].number_input("Benefit per 1, avg ($)", 0.0, 1e8, step=1.0,
+                                  key="pop_vmean",
+                                  help=f"What acting on a {st.session_state.pop_target} = 1 brings in: a gift, a "
+                                       "saved customer, the amount recovered from a fraudulent invoice.")
+                e[1].slider("Benefit spread (CV)", 0.0, 3.0, step=0.1,
+                            key="pop_vcv",
+                            help="Coefficient of variation (SD ÷ average); benefits are skewed (lognormal). "
+                                 "0 = every 1 worth the same; 0.8 = a few large values; "
+                                 "2+ = a handful of 1s hold most of the money.")
+            i0 = 2 if is_cls else 0
+            e[i0].number_input("Cost per record, avg ($)", 0.0, 1e8,
+                               step=0.01 if is_cls else 1.0, key="b_cost",
+                               help="Mailing, calling, buying the name, investigating. Paid on every "
+                                    "record you act on, whether it turns out to be a 1 or not.")
+            e[i0 + 1].slider("Cost spread (CV)", 0.0, 3.0, step=0.1,
+                             key="b_cost_cv",
+                             help="Each record gets its own cost (lognormal around the average). "
+                                  "0 = every record costs the same; 0.5 = most cost between about "
+                                  "half and double the average.")
+            if is_cls:
+                be = st.session_state.b_cost / st.session_state.pop_vmean \
+                    if st.session_state.pop_vmean > 0 else np.inf
+                e[4].markdown(f"Breakeven hit rate\n\n### {be:.1%}" if np.isfinite(be) else "Breakeven\n\n–",
+                              help="Breakeven hit rate = cost ÷ benefit. A record is worth acting on only if the chance "
+                                 "it's a 1 beats this. If a model's hit rate in your capacity is "
+                                 "below it, acting on all of them loses money.")
+        else:
+            st.caption("Every 1 counts the same; there is no cost or benefit.")
+
     # Show only the settings the two chosen metrics depend on; the rest keep their values.
     PARAM_USERS = {
-        "b_cost": {"profit_top", "profit_topn", "roi_top", "profit_max", "profit_rule"},
         "b_top": {"lift_top", "gain_top", "value_top", "profit_top", "roi_top"},
         "b_topn": {"precision_topn", "value_topn", "profit_topn"},
         "b_gain": {"depth_gain"},
         "b_thr": {"accuracy", "precision", "recall", "f1"} if is_cls else set(),
     }
     chosen = {st.session_state.select_by, st.session_state.judge_by}
-    shown = [p_ for p_, users in PARAM_USERS.items() if users & chosen
-             and (p_ != "b_cost" or use_usd)]
+    shown = [p_ for p_, users in PARAM_USERS.items() if users & chosen]
 
     def set_thr(v):
         st.session_state.b_thr = round(float(v), 4)
 
     def param_input(p_):
-        if p_ == "b_cost":
-            st.number_input("Cost per action ($)", 0.0, 1e7, step=0.01 if is_cls else 1.0,
-                            key="b_cost", help="Cost of mailing / calling / reviewing one record.")
-        elif p_ == "b_top":
+        if p_ == "b_top":
             st.slider("Capacity: act on top %", 1.0, 100.0, step=1.0, key="b_top",
                       help="Capacity as a share of the list. Used by the 'top %' metrics.")
         elif p_ == "b_topn":
@@ -458,12 +506,12 @@ with tab_biz:
                       help="Set the threshold to the share of 1s in the population.")
 
     if shown:
-        for col, p_ in zip(st.columns(4), shown):
+        for col, p_ in zip(st.columns(max(4, len(shown))), shown):
             with col:
                 param_input(p_)
     else:
         st.caption("Neither chosen metric needs a capacity, cost or threshold setting.")
-    others = [p_ for p_ in PARAM_USERS if p_ not in shown and (p_ != "b_cost" or use_usd)
+    others = [p_ for p_ in PARAM_USERS if p_ not in shown
               and (p_ != "b_thr" or is_cls)]
     if others:
         with st.expander("⚙️ Settings for the comparison metrics (they don't change your "
@@ -471,7 +519,7 @@ with tab_biz:
             st.caption("The cost chart, Spearman chart and ranking table below also score every "
                        "model on the other metrics. These settings apply only to those: "
                        "e.g. the threshold behind 'Accuracy @ p>…'.")
-            for col, p_ in zip(st.columns(4), others):
+            for col, p_ in zip(st.columns(max(4, len(others))), others):
                 with col:
                     param_input(p_)
 
@@ -491,6 +539,7 @@ model_spec = ModelSpec(n_models=int(s.m_n), seed=s.model_seed, auc=tuple(s.m_auc
                        value_tilt=tuple(s.m_tilt) if use_usd else (0.0, 0.0),
                        calib_bias=tuple(s.m_calib), corr=tuple(s.m_corr), hetero=tuple(s.m_het),
                        shrink=tuple(s.m_shrink), bias=tuple(s.m_bias),
+                       scale=s.get("m_scale", "log"),
                        profile_path=bank_path if use_profiles else "",
                        profile_algos=tuple(s.m_palgos), strength=tuple(s.m_strength))
 biz = biz_from_state()
@@ -596,27 +645,10 @@ with tab_pop, out_col:
         k[0].metric("Records", f"{pop.n:,}")
         k[1].metric(f"{target} = 1", f"{int(y.sum()):,}")
         k[2].metric("Rate of 1s", f"{y.mean():.2%}")
-        v = pop.value[y == 1]
-        if use_usd:
-            k[3].metric("Total value of the 1s", f"${v.sum():,.0f}")
-        if not use_usd:
-            st.info(f"Dollars are off: every {target} = 1 counts the same, and the business "
-                    "question is how many 1s land where you can act on them.")
-        elif pop_spec.value_cv > 0:
-            fig = px.histogram(x=v, nbins=80, title=f"Value of each {target} = 1 record",
-                               labels={"x": "$ value"}, color_discrete_sequence=[COL_PICKED])
-            fig.update_traces(marker_line_width=1, marker_line_color="white")
-            fig.update_yaxes(title="records")
-            st.plotly_chart(style_fig(fig), use_container_width=True)
-            top10 = np.sort(v)[-max(1, len(v) // 10):].sum() / v.sum()
-            st.dataframe(pd.DataFrame([{
-                "mean": f"${v.mean():,.2f}", "median": f"${np.median(v):,.2f}",
-                "90th pct": f"${np.quantile(v, .9):,.2f}", "99th pct": f"${np.quantile(v, .99):,.2f}",
-                "top 10% of 1s hold": f"{top10:.1%} of the value"}]),
-                hide_index=True, use_container_width=True)
-        else:
-            st.info(f"Every {target} = 1 record is worth ${pop_spec.value_mean:,.2f}. "
-                    "Raise the spread to make some 1s more valuable than others.")
+        k[3].metric(f"Records per {target} = 1", f"{len(y) / max(1, y.sum()):,.0f}")
+        st.info(f"This page describes the records: how many there are and how many are "
+                f"{target} = 1. What a {target} = 1 is worth, and what acting on a record costs, "
+                "are business assumptions: set them under **Economics** on ③ Business success.")
     else:
         nz = y[y != 0] if pop_spec.shape == "zero_inflated" else y
         k = st.columns(4)
@@ -692,7 +724,7 @@ with tab_models, out_col2:
 
     rows = []
     for n in choices:
-        d = decile_table(task, pop.y, ms.scores[idx[n]], pop.value, biz.cost)
+        d = decile_table(task, pop.y, ms.scores[idx[n]], pop.value, record_costs(biz, pop.n))
         d["model"] = n
         rows.append(d)
     if rows:
@@ -762,9 +794,19 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
     gap = c["opportunity_cost"]
     rel = gap / abs(c["ideal_value"]) if c["ideal_value"] else np.nan
     k[2].metric("Opportunity cost of the statistical pick", fmt_gap(task, judge_by, gap),
-                (f"{rel:.0%} of what was available" if jud_m.money and np.isfinite(rel) else
+                ("even the best model loses money here" if jud_m.money and c["ideal_value"] <= 0 else
+                 f"{rel:.0%} of what was available" if jud_m.money and np.isfinite(rel) else
                  f"rank agreement across models ρ = {c['rank_corr']:.2f}"),
                 delta_color="inverse" if gap > 0 else "off")
+    if judge_by == "profit_max" and "best_n" in table:
+        st.caption(f"No capacity limit: each model acts down its list until net benefit peaks. "
+                   f"{picked} would act on **{int(table.at[picked, 'best_n']):,}** records; "
+                   f"{ideal} on **{int(table.at[ideal, 'best_n']):,}**.")
+    elif judge_by == "precision_topn":
+        hp = round(c["picked_value"] * biz.top_n)
+        hi_ = round(c["ideal_value"] * biz.top_n)
+        st.caption(f"In the top {biz.top_n:,}: **{hp:,}** 1s for {picked} vs **{hi_:,}** for {ideal}, "
+                   f"so **{hi_ - hp:,} fewer** by selecting on {sel_name}.")
 
     left, right = st.columns([1.35, 1], gap="large")
     with left:
@@ -794,7 +836,7 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
     with right:
         curves = []
         for n in focus:
-            cc = cumulative_curves(task, y, scores[idx[n]], value, biz.cost)
+            cc = cumulative_curves(task, y, scores[idx[n]], value, record_costs(biz, len(y)))
             cc["model"] = f"{n} · {role(n)}"
             curves.append(cc)
         cc = pd.concat(curves)
@@ -888,8 +930,26 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
         st.plotly_chart(style_fig(fig, 620), use_container_width=True, key=f"{key}_chart3")
 
 with tab_biz:
+    if is_cls and use_usd and pop_spec.value_cv > 0:
+        with st.expander(f"Show the benefit distribution (what each {target} = 1 is worth)"):
+            v = pop.value[pop.y == 1]
+            fig = px.histogram(x=v, nbins=80, labels={"x": "$ benefit"},
+                               color_discrete_sequence=[COL_PICKED])
+            fig.update_traces(marker_line_width=1, marker_line_color="white")
+            fig.update_yaxes(title="records")
+            st.plotly_chart(style_fig(fig, 320), use_container_width=True)
+            top10 = np.sort(v)[-max(1, len(v) // 10):].sum() / v.sum()
+            st.dataframe(pd.DataFrame([{
+                "total": f"${v.sum():,.0f}", "mean": f"${v.mean():,.2f}",
+                "median": f"${np.median(v):,.2f}", "90th pct": f"${np.quantile(v, .9):,.2f}",
+                "99th pct": f"${np.quantile(v, .99):,.2f}",
+                "top 10% of 1s hold": f"{top10:.1%} of the value"}]),
+                hide_index=True, use_container_width=True)
+    sim_symbol = None
+    if "knob_scale" in table and table.knob_scale.nunique() > 1:
+        sim_symbol = table.knob_scale.map({"log": "log(1 + $)", "raw": "raw $"}).rename("built on")
     render_selection(table, task, pop.y, pop.value, ms.scores, idx, biz, select_by, judge_by,
-                     target, key="sim", hide=() if use_usd else tuple(USD_KEYS))
+                     target, key="sim", symbol=sim_symbol, hide=tuple(HIDDEN))
     sel_name, jud_name = label(task, select_by, biz), label(task, judge_by, biz)
     with st.expander("Is this a fluke? Repeat with fresh model draws"):
         reps = st.slider("Replicates", 5, 50, 10, step=5)

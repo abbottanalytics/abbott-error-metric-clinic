@@ -75,3 +75,17 @@ def test_shrink_and_bias_leave_ranking_alone(reg_pop):
         assert other["spearman"] == pytest.approx(base["spearman"], abs=1e-9)
         assert other["profit_top"] == pytest.approx(base["profit_top"])
         assert other["rmse"] > base["rmse"]
+
+
+def test_raw_and_log_models_matched_on_ranking():
+    """Mixed scale: half the models are built on raw $ and half on log(1+$),
+    with about the same overall rank correlation."""
+    from dataclasses import replace as _replace
+    import numpy as _np
+    from metric_clinic_sim import ModelSpec, _spearman, make_models
+    pop = make_population(PopulationSpec(task=REGRESSION, n=20_000, shape="lognormal", mean=500, cv=1.5))
+    ms = make_models(pop, ModelSpec(n_models=6, seed=1, corr=(0.6, 0.6), scale="mixed"))
+    scales = [p["scale"] for p in ms.params]
+    assert scales == ["log", "raw"] * 3
+    sp = _np.array([_spearman(s, pop.y) for s in ms.scores])
+    assert abs(sp[0::2].mean() - sp[1::2].mean()) < 0.03

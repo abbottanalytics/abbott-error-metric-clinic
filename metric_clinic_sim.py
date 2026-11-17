@@ -138,6 +138,9 @@ class ModelSpec:
     hetero: tuple = (0.0, 0.0)
     shrink: tuple = (1.0, 1.0)
     bias: tuple = (0.0, 0.0)
+    # regression, skewed targets: the scale each model is built on --
+    # "log" (log1p, back-transformed), "raw" (dollars), or "mixed" (half of each)
+    scale: str = "log"
     # empirical mode: borrow real models' decile-by-decile shapes (classification)
     profile_path: str = ""       # ProfileBank .npz (classification or regression); "" = parametric
     profile_algos: tuple = ()    # restrict to these algorithms; () = all
@@ -209,12 +212,43 @@ def _classification_scores(pop: Population, p: dict, rng) -> np.ndarray:
     return 1 / (1 + np.exp(-logit))
 
 
+def _spearman(a, b):
+    return np.corrcoef(stats.rankdata(a), stats.rankdata(b))[0, 1]
+
+
+def _raw_predictions(pop: Population, p: dict, rng) -> np.ndarray:
+    """A model built on raw dollars, matched on overall ranking quality (Spearman)
+    to the log-scale model with the same knobs, so the two differ only in where
+    their errors fall: raw-scale noise is constant in dollars, so it swamps the
+    small values and barely touches the big ones."""
+    y = pop.y
+    target = _spearman(_regression_predictions(pop, {**p, "scale": "log"}, rng), y)
+    m, sd = y.mean(), y.std()
+    pct = stats.norm.cdf(pop.rank_z)
+    w = np.clip(1 + p["hetero"] * (2 * pct - 1), 0.05, None)
+    w /= np.sqrt(np.mean(w ** 2))
+    z = w * rng.standard_normal(pop.n)
+    sub = rng.choice(pop.n, size=min(pop.n, 20_000), replace=False)
+    lo, hi = -4.0, 4.0                       # search log10(noise / sd)
+    for _ in range(30):
+        mid = (lo + hi) / 2
+        if _spearman(y[sub] + 10 ** mid * sd * z[sub], y[sub]) > target:
+            lo = mid
+        else:
+            hi = mid
+    k = 10 ** ((lo + hi) / 2)
+    pred = m + p["shrink"] * (y - m + k * sd * z) / (1 + k ** 2)
+    return pred + p["bias"] * sd
+
+
 def _regression_predictions(pop: Population, p: dict, rng) -> np.ndarray:
     """Predictions built on the modeling scale (log1p for skewed targets).
 
     shrink=1 is a calibrated model (E[actual | prediction] ~ prediction on the
     modeling scale), which means its slope on the actual is corr**2.
     """
+    if pop.spec.shape != "normal" and p.get("scale", "log") == "raw":
+        return _raw_predictions(pop, p, rng)
     y = pop.y
     skewed = pop.spec.shape != "normal"
     t = np.log1p(y) if skewed else y
@@ -270,6 +304,9 @@ def make_models(pop: Population, spec: ModelSpec) -> ModelSet:
     if spec.profile_path:
         return _profile_models(pop, spec, rng)
     params = draw_params(spec, pop.task, rng)
+    if pop.task != CLASSIFICATION and pop.spec.shape != "normal":
+        for i, p in enumerate(params):
+            p["scale"] = spec.scale if spec.scale != "mixed" else ("log", "raw")[i % 2]
     gen = _classification_scores if pop.task == CLASSIFICATION else _regression_predictions
     scores = np.vstack([gen(pop, p, rng) for p in params])
     width = len(str(spec.n_models))

@@ -22,7 +22,8 @@ from metric_clinic_sim import CLASSIFICATION
 
 @dataclass
 class BusinessSpec:
-    cost: float = 0.68           # cost of acting on one record (mail, call, offer)
+    cost: float = 0.68           # cost of acting on one record (mail, call, offer); the mean if cost_cv > 0
+    cost_cv: float = 0.0         # spread of the per-record cost (lognormal CV); 0 = every record costs `cost`
     top_pct: float = 0.10        # capacity: share of the population you can act on
     top_n: int = 1000            # capacity as a record count ("we can call 1,000 people")
     gain_target: float = 0.90    # "how deep to go to capture this share of the 1s"
@@ -123,11 +124,23 @@ def _depth_to_capture(cum, total, target):
     return (min(idx, len(cum) - 1) + 1) / len(cum)
 
 
-def _roi(profit, k, cost):
-    return profit / (k * cost) if cost > 0 else np.nan
+COST_SEED = 2718  # fixed so every model (and every rerun) faces the same per-record costs
 
 
-def _classification_row(y, p, payoff, gift, biz, avg_value):
+def record_costs(biz: BusinessSpec, n: int) -> np.ndarray:
+    """Cost of acting on each record. Fixed at biz.cost, or lognormal around it."""
+    if biz.cost_cv <= 0 or biz.cost <= 0:
+        return np.full(n, float(biz.cost))
+    sigma2 = np.log1p(biz.cost_cv ** 2)
+    rng = np.random.default_rng(COST_SEED + n)
+    return rng.lognormal(np.log(biz.cost) - sigma2 / 2, np.sqrt(sigma2), n)
+
+
+def _roi(profit, spent):
+    return profit / spent if spent > 0 else np.nan
+
+
+def _classification_row(y, p, payoff, gift, biz, avg_value, cost):
     n, n_pos = len(y), y.sum()
     order = rank_order(p)
     k = max(1, int(np.ceil(biz.top_pct * n)))
@@ -151,7 +164,8 @@ def _classification_row(y, p, payoff, gift, biz, avg_value):
     cum_pos = np.cumsum(y_sorted)
     cum_gift = np.cumsum(gift[order])
     profit_curve = np.cumsum(payoff[order])
-    act = p * avg_value > biz.cost
+    spent = np.cumsum(cost[order])
+    act = p * avg_value > cost
     # partial AUC: mean true-positive rate over the first 10% of negatives, scaled to 0..1
     tpr_at_neg = cum_pos[y_sorted == 0] / n_pos
     m = max(1, int(0.10 * len(tpr_at_neg)))
@@ -171,15 +185,16 @@ def _classification_row(y, p, payoff, gift, biz, avg_value):
         "depth_gain": _depth_to_capture(cum_pos, n_pos, biz.gain_target),
         "profit_top": profit_curve[k - 1],
         "profit_topn": profit_curve[kn - 1],
-        "roi_top": _roi(profit_curve[k - 1], k, biz.cost),
+        "roi_top": _roi(profit_curve[k - 1], spent[k - 1]),
         "profit_max": max(0.0, profit_curve.max()),
         "best_depth": (np.argmax(profit_curve) + 1) / n if profit_curve.max() > 0 else 0.0,
+        "best_n": int(np.argmax(profit_curve) + 1) if profit_curve.max() > 0 else 0,
         "profit_rule": payoff[act].sum(),
         "share_acted_rule": act.mean(),
     }
 
 
-def _regression_row(y, y_rank, pred, biz):
+def _regression_row(y, y_rank, pred, biz, cost):
     n = len(y)
     order = rank_order(pred)
     k = max(1, int(np.ceil(biz.top_pct * n)))
@@ -187,8 +202,9 @@ def _regression_row(y, y_rank, pred, biz):
     err = pred - y
     y_sorted = y[order]
     cum_val = np.cumsum(y_sorted)
-    profit_curve = np.cumsum(y_sorted - biz.cost)
-    act = pred > biz.cost
+    profit_curve = np.cumsum(y_sorted - cost[order])
+    spent = np.cumsum(cost[order])
+    act = pred > cost
     total = y.sum()
     return {
         "r2": 1 - np.sum(err ** 2) / np.sum((y - y.mean()) ** 2),
@@ -201,10 +217,11 @@ def _regression_row(y, y_rank, pred, biz):
         "depth_gain": _depth_to_capture(cum_val, total, biz.gain_target) if total > 0 else np.nan,
         "profit_top": profit_curve[k - 1],
         "profit_topn": profit_curve[kn - 1],
-        "roi_top": _roi(profit_curve[k - 1], k, biz.cost),
+        "roi_top": _roi(profit_curve[k - 1], spent[k - 1]),
         "profit_max": max(0.0, profit_curve.max()),
         "best_depth": (np.argmax(profit_curve) + 1) / n if profit_curve.max() > 0 else 0.0,
-        "profit_rule": (y[act] - biz.cost).sum(),
+        "best_n": int(np.argmax(profit_curve) + 1) if profit_curve.max() > 0 else 0,
+        "profit_rule": (y[act] - cost[act]).sum(),
         "share_acted_rule": act.mean(),
     }
 
@@ -215,16 +232,18 @@ def evaluate(task, y, scores, names, biz: BusinessSpec, value=None, params=None)
     if task == CLASSIFICATION:
         y = np.asarray(y).astype(int)
         value = np.ones(len(y)) if value is None else np.asarray(value, float)
+        cost = record_costs(biz, len(y))
         gift = y * value
-        payoff = gift - biz.cost
+        payoff = gift - cost
         avg_value = value[y == 1].mean()
         for s in scores:
-            rows.append(_classification_row(y, s, payoff, gift, biz, avg_value))
+            rows.append(_classification_row(y, s, payoff, gift, biz, avg_value, cost))
     else:
         y = np.asarray(y, float)
         y_rank = stats.rankdata(y)
+        cost = record_costs(biz, len(y))
         for s in scores:
-            rows.append(_regression_row(y, y_rank, s, biz))
+            rows.append(_regression_row(y, y_rank, s, biz, cost))
     table = pd.DataFrame(rows, index=pd.Index(names, name="model"))
     if params is not None:
         table = pd.concat([pd.DataFrame(params, index=table.index).add_prefix("knob_"), table], axis=1)
@@ -237,12 +256,15 @@ def evaluate(task, y, scores, names, biz: BusinessSpec, value=None, params=None)
 
 def rank(table, task, key) -> pd.Series:
     m = metric(task, key)
-    return table[key].rank(ascending=not m.higher_better, method="min").astype(int)
+    return table[key].rank(ascending=not m.higher_better, method="min", na_option="bottom").astype(int)
 
 
 def best(table, task, key) -> str:
     m = metric(task, key)
-    return table[key].idxmax() if m.higher_better else table[key].idxmin()
+    col = table[key]
+    if col.isna().all():                 # e.g. ROI when nothing is spent
+        return table.index[0]
+    return col.idxmax() if m.higher_better else col.idxmin()
 
 
 def choose(table, task, select_by, judge_by) -> dict:
@@ -266,7 +288,7 @@ def regret_by_metric(table, task, judge_by) -> pd.DataFrame:
     """For every metric you might select by: which model it picks and what that costs."""
     rows = []
     for m in metrics_for(task):
-        if m.key not in table:
+        if m.key not in table or table[m.key].isna().all():
             continue
         c = choose(table, task, m.key, judge_by)
         rows.append({"key": m.key, "family": m.family, "picks": c["picked"],
@@ -290,15 +312,16 @@ def decile_table(task, y, score, value=None, cost=0.0, bins=10) -> pd.DataFrame:
     y = np.asarray(y, float)
     order = rank_order(score)
     groups = np.array_split(order, bins)
+    c = np.broadcast_to(np.asarray(cost, float), len(y))
     rows = []
     for i, g in enumerate(groups, 1):
         row = {"decile": i, "n": len(g), "mean_score": score[g].mean(), "mean_actual": y[g].mean()}
         if task == CLASSIFICATION:
             v = np.ones(len(y)) if value is None else value
             row["lift"] = y[g].mean() / y.mean()
-            row["profit"] = (y[g] * v[g] - cost).sum()
+            row["profit"] = (y[g] * v[g] - c[g]).sum()
         else:
-            row["profit"] = (y[g] - cost).sum()
+            row["profit"] = (y[g] - c[g]).sum()
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -307,13 +330,14 @@ def cumulative_curves(task, y, score, value=None, cost=0.0, points=200) -> pd.Da
     """Depth vs. cumulative share of 1s/value captured and cumulative profit."""
     y = np.asarray(y, float)
     order = rank_order(score)
+    c = np.broadcast_to(np.asarray(cost, float), len(y))[order]
     if task == CLASSIFICATION:
         v = np.ones(len(y)) if value is None else value
         gain = np.cumsum(y[order]) / y.sum()
-        profit = np.cumsum(y[order] * v[order] - cost)
+        profit = np.cumsum(y[order] * v[order] - c)
     else:
         gain = np.cumsum(y[order]) / y.sum()
-        profit = np.cumsum(y[order] - cost)
+        profit = np.cumsum(y[order] - c)
     n = len(y)
     idx = np.unique(np.linspace(0, n - 1, points).astype(int))
     return pd.DataFrame({"depth": np.r_[0, (idx + 1) / n],

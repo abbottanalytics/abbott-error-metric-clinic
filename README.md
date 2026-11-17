@@ -114,7 +114,7 @@ is what makes rankings reverse.
 
 1. **Population tab.** Pick the closest preset, then edit the population to fit the audience member's case. When they agree it looks right, turn on **Freeze population**.
 2. **Model tab.** Set the ranges for how the candidate models behave. Collapse a range to a single value to turn that behavior off and see whether the reversal goes away.
-3. **Business tab.** Choose the metric they select models by now, and what the business actually values. The headline shows the opportunity cost. The bar chart shows the cost of selecting by every other metric.
+3. **Business tab.** Set the **Economics** (benefit per 1, cost per record, each with a spread; the breakeven hit rate is cost ÷ benefit). Then choose the metric they select models by now, and what the business actually values. Only the capacity/threshold settings those two metrics use are shown; the rest are in the comparison-settings panel. The headline shows the opportunity cost. The bar chart shows the cost of selecting by every other metric.
 4. **"Is this a fluke?"** Rerun with fresh model draws. It reports how often the statistical pick was also the business winner, and the typical shortfall.
 
 Each preset's model seed is the draw whose opportunity cost is at the median of 20 draws,
