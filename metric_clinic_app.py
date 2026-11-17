@@ -12,6 +12,7 @@ Three tabs follow the conversation with the audience:
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from dataclasses import asdict, replace
 
 import numpy as np
@@ -28,6 +29,7 @@ from metric_clinic_kdd98_target_d import load as load_target_d, predictions_path
 from metric_clinic_kdd98_target_d import profiles_path as target_d_profiles
 from metric_clinic_kdd98 import load as load_kdd98
 from metric_clinic_presets import PRESETS
+import metric_clinic_saved as saved
 from metric_clinic_sim import (CLASSIFICATION, REGRESSION, ModelSpec, PopulationSpec,
                                make_models, make_population)
 
@@ -95,13 +97,52 @@ def apply_preset():
     st.session_state.select_by = p["select_by"]
     st.session_state.judge_by = p["judge_by"]
     st.session_state.frozen = False
+    st.session_state.pop_usd = True
+    st.session_state.resumed_from = None
     st.session_state.pop_seed = p["pop"].seed
     st.session_state.model_seed = p["models"].seed
+
+
+# Settings remembered between runs (page and frozen state are not)
+EXTRA_KEYS = ["preset", "pop_usd", "m_mode", "m_palgos", "select_by", "judge_by",
+              "pop_seed", "model_seed"]
+SETTING_KEYS = [*POP_KEYS.values(), *MODEL_KEYS.values(), *BIZ_KEYS.values(), *EXTRA_KEYS]
+RANGE_KEYS = {k_ for k_ in MODEL_KEYS.values() if k_ != "m_n"}
+
+
+def current_settings():
+    out = {}
+    for k_ in SETTING_KEYS:
+        if k_ in st.session_state:
+            v = st.session_state[k_]
+            out[k_] = list(v) if isinstance(v, (tuple, list)) else v
+    return out
+
+
+def apply_settings(settings):
+    for k_, v in settings.items():
+        if k_ not in SETTING_KEYS:
+            continue
+        if k_ == "preset" and v not in PRESETS:
+            continue
+        st.session_state[k_] = tuple(v) if k_ in RANGE_KEYS and isinstance(v, list) else v
+    st.session_state.frozen = False
 
 
 if "preset" not in st.session_state:
     st.session_state.preset = next(iter(PRESETS))
     apply_preset()
+    _last = saved.read()["last"]
+    if _last:
+        apply_settings(_last["settings"])
+        st.session_state.resumed_from = saved.when(_last)
+
+
+# Streamlit drops a widget's value on any run where the widget isn't drawn (e.g. the
+# $ inputs while "Dollars matter" is off). Re-assigning keeps every input alive.
+for _k in [*POP_KEYS.values(), *MODEL_KEYS.values(), *BIZ_KEYS.values()]:
+    if _k in st.session_state:
+        st.session_state[_k] = st.session_state[_k]
 
 
 def bump(key):
@@ -122,8 +163,28 @@ def get_models(pop_kw: tuple, model_kw: tuple):
     return make_models(get_population(pop_kw), ModelSpec(**dict(model_kw)))
 
 
+@st.cache_resource
+def _stamps():
+    """When each cached result was last computed (survives reruns, not restarts)."""
+    return {}
+
+
+def stamp(*key):
+    _stamps()[key] = datetime.now()
+
+
+def stamp_text(*key):
+    t = _stamps().get(key)
+    return t.strftime("%a %b %-d, %H:%M:%S") if t else "earlier this session"
+
+
+def file_date(path):
+    return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%b %-d, %Y %H:%M")
+
+
 @st.cache_data(max_entries=12, show_spinner="Scoring every model...")
 def get_table(pop_kw: tuple, model_kw: tuple, biz_kw: tuple):
+    stamp("sim", pop_kw, model_kw, biz_kw)
     pop, ms = get_population(pop_kw), get_models(pop_kw, model_kw)
     return evaluate(pop.task, pop.y, ms.scores, ms.names, BusinessSpec(**dict(biz_kw)),
                     pop.value, ms.params)
@@ -133,7 +194,7 @@ def get_table(pop_kw: tuple, model_kw: tuple, biz_kw: tuple):
 # Formatting
 # ----------------------------------------------------------------------------
 
-PCT_KEYS = {"accuracy", "precision", "recall", "gain_top", "value_top", "depth_gain",
+PCT_KEYS = {"accuracy", "precision", "recall", "precision_topn", "gain_top", "value_top", "depth_gain",
             "best_depth", "share_acted_rule"}
 
 
@@ -153,6 +214,14 @@ def fmt_gap(task, key, v):
     if key in PCT_KEYS:
         return f"{v * 100:.1f} pts"
     return fmt(task, key, v)
+
+
+def generic_label(task, key):
+    """Dropdown text. It must not depend on capacity/threshold values: if an option's
+    text changes, Streamlit treats the dropdown as new and resets the choice."""
+    m = metric(task, key)
+    return f"{m.label.format(top='top X%', n='top N', gain='X%', thr='threshold')}  ·  {m.family}" \
+        .replace("top top", "top")
 
 
 def label(task, key, biz):
@@ -184,16 +253,32 @@ with st.sidebar:
               disabled=st.session_state.frozen, use_container_width=True)
     c2.button("New model draws", on_click=bump, args=("model_seed",), use_container_width=True)
     st.caption(f"population seed {st.session_state.pop_seed} · model seed {st.session_state.model_seed}")
+    run_stamp = st.empty()
+    memory_box = st.container()
     st.divider()
     st.caption("Machine Learning Week EU · Dean Abbott, Abbott Analytics")
 
 task = st.session_state.pop_task
 frozen = st.session_state.frozen
 is_cls = task == CLASSIFICATION
+st.session_state.setdefault("pop_usd", True)
+use_usd = (not is_cls) or st.session_state.pop_usd
+# metrics that need a $ value per 1 (hidden when the problem has no money in it)
+USD_KEYS = {"value_top", "profit_top", "profit_topn", "roi_top", "profit_max", "profit_rule"}
 
-tab_pop, tab_models, tab_biz, tab_real, tab_real_d = st.tabs(
-    ["① Population", "② Model behavior", "③ Business success",
-     "④ Real: who responds", "⑤ Real: gift amount"])
+# Page switcher. st.tabs forgets the open tab when a chart leaves fullscreen, so the
+# page lives in session state instead. Every page still runs (keeping its inputs
+# alive); pages not selected are hidden with CSS.
+PAGES = ["① Population", "② Model behavior", "③ Business success",
+         "④ Real: who responds", "⑤ Real: gift amount"]
+st.session_state.setdefault("page", PAGES[0])
+st.radio("Page", PAGES, key="page", horizontal=True, label_visibility="collapsed")
+_page_keys = ["pg_pop", "pg_models", "pg_biz", "pg_real", "pg_real_d"]
+st.markdown("<style>" + "".join(
+    f".st-key-{k_} {{display: none;}}" for k_, p_ in zip(_page_keys, PAGES)
+    if p_ != st.session_state.page) + "</style>", unsafe_allow_html=True)
+st.divider()
+tab_pop, tab_models, tab_biz, tab_real, tab_real_d = [st.container(key=k_) for k_ in _page_keys]
 
 
 # ----------------------------------------------------------------------------
@@ -211,10 +296,14 @@ with tab_pop:
         if is_cls:
             st.number_input("% of records that are 1s", 0.1, 60.0, step=0.5, key="pop_prev",
                             format="%.1f", disabled=frozen)
-            st.number_input("Average $ value of a 1", 0.0, 1e7, step=1.0, key="pop_vmean",
-                            disabled=frozen)
-            st.slider("Spread of that value (CV; 0 = every 1 worth the same)", 0.0, 3.0,
-                      step=0.1, key="pop_vcv", disabled=frozen)
+            st.checkbox("Dollars matter (each 1 has a $ value)", key="pop_usd", disabled=frozen,
+                        help="Off: the business only counts 1s (e.g. how many frauds land in the "
+                             "100 cases we can investigate). Profit, ROI and %-of-$ metrics are hidden.")
+            if st.session_state.pop_usd:
+                st.number_input("Average $ value of a 1", 0.0, 1e7, step=1.0, key="pop_vmean",
+                                disabled=frozen)
+                st.slider("Spread of that value (CV; 0 = every 1 worth the same)", 0.0, 3.0,
+                          step=0.1, key="pop_vcv", disabled=frozen)
         else:
             st.selectbox("Shape of the target", ["normal", "lognormal", "zero_inflated"],
                          key="pop_shape", disabled=frozen,
@@ -279,7 +368,8 @@ with tab_models:
             st.slider("Concentration of signal at the top", 0.0, 1.0, step=0.05, key="m_conc",
                       help="0: every 1 is equally easy to find. 1: a quarter of the 1s are very easy, "
                            "the rest are barely separated. AUC held roughly fixed.")
-            st.slider("Value tilt (finds high-value 1s ↔ low-value 1s)", -1.0, 1.0, step=0.05,
+            if use_usd:
+                st.slider("Value tilt (finds high-value 1s ↔ low-value 1s)", -1.0, 1.0, step=0.05,
                       key="m_tilt", help="+ ranks the high-value 1s higher; − finds the cheap ones. "
                                          "AUC unchanged; profit is not.")
             st.slider("Calibration bias (log-odds)", -3.0, 3.0, step=0.1, key="m_calib",
@@ -300,10 +390,15 @@ with tab_models:
 # Tab 3 -- business inputs
 # ----------------------------------------------------------------------------
 
-keys = [m.key for m in metrics_for(task)]
-for k, fallback in (("select_by", keys[0]), ("judge_by", "profit_max")):
+keys = [m.key for m in metrics_for(task) if use_usd or m.key not in USD_KEYS]
+for k, fallback in (("select_by", keys[0]),
+                    ("judge_by", "profit_max" if use_usd else "precision_topn")):
     if st.session_state.get(k) not in keys:
         st.session_state[k] = fallback
+
+
+def s_prev_rate():
+    return st.session_state.pop_prev / 100 if is_cls else 0.5
 
 
 def biz_from_state():
@@ -313,22 +408,72 @@ def biz_from_state():
 
 
 with tab_biz:
-    r1 = st.columns([1.3, 1.3, 0.9, 1, 0.9, 1, 1])
     biz_preview = biz_from_state()
-    r1[0].selectbox("Metric you select models by", keys, key="select_by",
-                    format_func=lambda k: f"{label(task, k, biz_preview)}  ·  {metric(task, k).family}")
-    r1[1].selectbox("What the business actually values", keys, key="judge_by",
-                    format_func=lambda k: f"{label(task, k, biz_preview)}  ·  {metric(task, k).family}")
-    r1[2].number_input("Cost per action ($)", 0.0, 1e7, step=0.01 if is_cls else 1.0,
-                       key="b_cost", help="Cost of mailing / calling / reviewing one record.")
-    r1[3].slider("Capacity: act on top %", 1.0, 100.0, step=1.0, key="b_top")
-    r1[4].number_input("…or top N records", 1, 10_000_000, step=100, key="b_topn",
-                       help="Count-based capacity, used by the 'top N' metrics.")
-    r1[5].slider("Capture target %", 10.0, 100.0, step=5.0, key="b_gain",
-                 help="Used by 'depth to capture X% of 1s / value'.")
-    if is_cls:
-        r1[6].slider("Probability threshold", 0.01, 0.99, step=0.01, key="b_thr",
-                     help="Used by accuracy, precision, recall and F1.")
+    r0 = st.columns(2, gap="large")
+    r0[0].selectbox("Metric you select models by", keys, key="select_by",
+                    format_func=lambda k: generic_label(task, k))
+    r0[1].selectbox("What the business actually values", keys, key="judge_by",
+                    format_func=lambda k: generic_label(task, k))
+    if st.session_state.select_by == st.session_state.judge_by:
+        st.info("You're selecting and judging by the same metric, so there's nothing to lose. "
+                "Pick what the business actually values in the right-hand box.")
+    # Show only the settings the two chosen metrics depend on; the rest keep their values.
+    PARAM_USERS = {
+        "b_cost": {"profit_top", "profit_topn", "roi_top", "profit_max", "profit_rule"},
+        "b_top": {"lift_top", "gain_top", "value_top", "profit_top", "roi_top"},
+        "b_topn": {"precision_topn", "value_topn", "profit_topn"},
+        "b_gain": {"depth_gain"},
+        "b_thr": {"accuracy", "precision", "recall", "f1"} if is_cls else set(),
+    }
+    chosen = {st.session_state.select_by, st.session_state.judge_by}
+    shown = [p_ for p_, users in PARAM_USERS.items() if users & chosen
+             and (p_ != "b_cost" or use_usd)]
+
+    def set_thr(v):
+        st.session_state.b_thr = round(float(v), 4)
+
+    def param_input(p_):
+        if p_ == "b_cost":
+            st.number_input("Cost per action ($)", 0.0, 1e7, step=0.01 if is_cls else 1.0,
+                            key="b_cost", help="Cost of mailing / calling / reviewing one record.")
+        elif p_ == "b_top":
+            st.slider("Capacity: act on top %", 1.0, 100.0, step=1.0, key="b_top",
+                      help="Capacity as a share of the list. Used by the 'top %' metrics.")
+        elif p_ == "b_topn":
+            st.number_input("Capacity: act on top N records", 1, 10_000_000, step=10,
+                            key="b_topn", help="Capacity as a count, e.g. the 100 invoices "
+                                               "you can investigate. Used by the 'top N' metrics.")
+        elif p_ == "b_gain":
+            st.slider("Capture target %", 10.0, 100.0, step=5.0, key="b_gain",
+                      help="How deep you must go to catch this share of the 1s.")
+        else:
+            st.number_input("Probability threshold", 0.0001, 0.9999, step=0.01,
+                            format="%.4f", key="b_thr",
+                            help="Records scored above this count as predicted 1s. "
+                                 "Only accuracy, precision, recall and F1 use it.")
+            b1, b2 = st.columns(2)
+            b1.button("0.5", on_click=set_thr, args=(0.5,), use_container_width=True)
+            b2.button("base rate", on_click=set_thr, args=(s_prev_rate(),),
+                      use_container_width=True,
+                      help="Set the threshold to the share of 1s in the population.")
+
+    if shown:
+        for col, p_ in zip(st.columns(4), shown):
+            with col:
+                param_input(p_)
+    else:
+        st.caption("Neither chosen metric needs a capacity, cost or threshold setting.")
+    others = [p_ for p_ in PARAM_USERS if p_ not in shown and (p_ != "b_cost" or use_usd)
+              and (p_ != "b_thr" or is_cls)]
+    if others:
+        with st.expander("⚙️ Settings for the comparison metrics (they don't change your "
+                         "two chosen metrics)"):
+            st.caption("The cost chart, Spearman chart and ranking table below also score every "
+                       "model on the other metrics. These settings apply only to those: "
+                       "e.g. the threshold behind 'Accuracy @ p>…'.")
+            for col, p_ in zip(st.columns(4), others):
+                with col:
+                    param_input(p_)
 
 
 # ----------------------------------------------------------------------------
@@ -337,11 +482,13 @@ with tab_biz:
 
 s = st.session_state
 pop_spec = PopulationSpec(task=task, n=int(s.pop_n), target_name=s.pop_target, seed=s.pop_seed,
-                          prevalence=s.pop_prev / 100, value_mean=s.pop_vmean, value_cv=s.pop_vcv,
+                          prevalence=s.pop_prev / 100, value_mean=s.pop_vmean,
+                          value_cv=s.pop_vcv if use_usd else 0.0,
                           shape=s.pop_shape, mean=s.pop_mean, sd=s.pop_sd, cv=s.pop_cv,
                           nonzero_rate=s.pop_nonzero / 100)
 model_spec = ModelSpec(n_models=int(s.m_n), seed=s.model_seed, auc=tuple(s.m_auc),
-                       concentration=tuple(s.m_conc), value_tilt=tuple(s.m_tilt),
+                       concentration=tuple(s.m_conc),
+                       value_tilt=tuple(s.m_tilt) if use_usd else (0.0, 0.0),
                        calib_bias=tuple(s.m_calib), corr=tuple(s.m_corr), hetero=tuple(s.m_het),
                        shrink=tuple(s.m_shrink), bias=tuple(s.m_bias),
                        profile_path=bank_path if use_profiles else "",
@@ -355,6 +502,60 @@ biz_kw = tuple(asdict(biz).items())
 pop = get_population(pop_kw)
 ms = get_models(pop_kw, model_kw)
 table = get_table(pop_kw, model_kw, biz_kw)
+run_stamp.caption(f"🕒 Simulation results computed {stamp_text('sim', pop_kw, model_kw, biz_kw)}")
+
+# ---- remember settings; recent and saved scenarios in the sidebar
+_summary = (f"{s.pop_target} · {int(s.pop_n):,} rows"
+            + (f" · {s.pop_prev:g}% 1s" if is_cls else "")
+            + f" · {label(task, s.select_by, biz)} → {label(task, s.judge_by, biz)}")
+saved.record(current_settings(), _summary)
+_mem = saved.read()
+
+
+def _load_recent():
+    i = st.session_state.get("recent_pick")
+    rec = saved.read()["recent"]
+    if i is not None and 0 < i < len(rec):
+        apply_settings(rec[i]["settings"])
+
+
+def _load_saved():
+    name = st.session_state.get("saved_pick")
+    if name in saved.read()["saved"]:
+        apply_settings(saved.read()["saved"][name]["settings"])
+
+
+def _save_named():
+    name = (st.session_state.get("save_name") or "").strip()
+    if name:
+        saved.save_named(name, current_settings(), _summary)
+        st.session_state.save_name = ""
+
+
+def _delete_saved():
+    saved.delete_named(st.session_state.get("saved_pick"))
+
+
+with memory_box:
+    if st.session_state.get("resumed_from"):
+        st.caption(f"↩️ Resumed your last session ({st.session_state.resumed_from}). "
+                   "Pick a preset to start fresh.")
+    st.markdown("**Scenarios**")
+    c1, c2 = st.columns([3, 1.2], vertical_alignment="bottom")
+    c1.text_input("Save current settings as", key="save_name", placeholder="e.g. invoice fraud top 100")
+    c2.button("Save", on_click=_save_named, use_container_width=True)
+    rec = _mem["recent"]
+    if len(rec) > 1:
+        st.selectbox("Recent", list(range(1, len(rec))), key="recent_pick",
+                     format_func=lambda i: f"{saved.when(rec[i])} · {rec[i]['summary']}")
+        st.button("Load recent", on_click=_load_recent, use_container_width=True)
+    names = sorted(_mem["saved"])
+    if names:
+        st.selectbox("Saved", names, key="saved_pick",
+                     format_func=lambda n_: f"{n_} ({saved.when(_mem['saved'][n_])})")
+        b1, b2 = st.columns(2)
+        b1.button("Load", on_click=_load_saved, use_container_width=True)
+        b2.button("Delete", on_click=_delete_saved, use_container_width=True)
 
 def make_roles(task, picked, ideal, select_by, judge_by, biz):
     """role(name) -> legend label; color(name) -> its fixed color."""
@@ -396,8 +597,12 @@ with tab_pop, out_col:
         k[1].metric(f"{target} = 1", f"{int(y.sum()):,}")
         k[2].metric("Rate of 1s", f"{y.mean():.2%}")
         v = pop.value[y == 1]
-        k[3].metric("Total value of the 1s", f"${v.sum():,.0f}")
-        if pop_spec.value_cv > 0:
+        if use_usd:
+            k[3].metric("Total value of the 1s", f"${v.sum():,.0f}")
+        if not use_usd:
+            st.info(f"Dollars are off: every {target} = 1 counts the same, and the business "
+                    "question is how many 1s land where you can act on them.")
+        elif pop_spec.value_cv > 0:
             fig = px.histogram(x=v, nbins=80, title=f"Value of each {target} = 1 record",
                                labels={"x": "$ value"}, color_discrete_sequence=[COL_PICKED])
             fig.update_traces(marker_line_width=1, marker_line_color="white")
@@ -442,7 +647,10 @@ with tab_pop, out_col:
 
 with tab_models, out_col2:
     choices = st.multiselect("Models to inspect", ms.names, default=focus, max_selections=4,
-                             help="Defaults to the statistical pick and the business winner.")
+                             help="M01…M%02d are the candidate models. Each one is drawn at random "
+                                  "from the ranges on the left (AUC, concentration, tilt, calibration). "
+                                  "Defaults to the statistical pick and the business winner; add others "
+                                  "to compare their curves. Their settings are in the table below." % len(ms.names))
     stat_key = "auc" if is_cls else "r2"
     fig = px.histogram(table, x=stat_key, nbins=30, color_discrete_sequence=[COL_OTHER],
                        title=f"{label(task, stat_key, biz)} across {len(table)} candidate models",
@@ -530,7 +738,7 @@ with tab_models, out_col2:
 # ----------------------------------------------------------------------------
 
 def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_by, target,
-                     key, symbol=None):
+                     key, symbol=None, hide=()):
     """Headline, scatter, curves, cost-by-metric, ranking table and agreement heatmap.
 
     Works for any scored model set -- simulated or real.
@@ -560,7 +768,7 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
 
     left, right = st.columns([1.35, 1], gap="large")
     with left:
-        df = table[[select_by, judge_by]].copy()
+        df = table[list(dict.fromkeys([select_by, judge_by]))].copy()
         df["role"] = [role(n) for n in df.index]
         df["model"] = df.index
         if symbol is not None:
@@ -591,7 +799,8 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
             curves.append(cc)
         cc = pd.concat(curves)
         cmap2 = {f"{n} · {role(n)}": role_color(n) for n in focus}
-        use_gain = judge_by in ("gain_top", "value_top", "depth_gain", "lift_top")
+        use_gain = judge_by in ("gain_top", "value_top", "depth_gain", "lift_top", "precision_topn") \
+            or (hide and not jud_m.money)
         ycol = "gain" if use_gain else "profit"
         fig = px.line(cc, x="depth", y=ycol, color="model", color_discrete_map=cmap2,
                       title=("Cumulative share of " + ("1s" if is_cls else target) + " captured")
@@ -600,8 +809,12 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
         fig.update_traces(line=dict(width=2.5))
         fig.update_xaxes(tickformat=".0%")
         fig.update_yaxes(tickformat=".0%" if use_gain else "$,.0f")
-        fig.add_vline(x=biz.top_pct, line_dash="dot", line_color=COL_OTHER,
-                      annotation_text=f"capacity {biz.top_pct:.0%}")
+        if judge_by.endswith("topn"):
+            fig.add_vline(x=biz.top_n / len(y), line_dash="dot", line_color=COL_OTHER,
+                          annotation_text=f"top {biz.top_n:,}")
+        else:
+            fig.add_vline(x=biz.top_pct, line_dash="dot", line_color=COL_OTHER,
+                          annotation_text=f"capacity {biz.top_pct:.0%}")
         if use_gain:
             fig.add_hline(y=biz.gain_target, line_dash="dot", line_color=COL_OTHER)
         st.plotly_chart(style_fig(fig, 470), use_container_width=True, key=f"{key}_chart1")
@@ -609,6 +822,7 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
     st.subheader("What would each selection metric have cost?")
     left, right = st.columns([1.15, 1], gap="large")
     reg = regret_by_metric(table, task, judge_by)
+    reg = reg[~reg.key.isin(hide)]
     reg["metric"] = [label(task, k_, biz) for k_ in reg.key]
     reg = reg.sort_values("opportunity_cost")
     fig = px.bar(reg, x="opportunity_cost", y="metric", orientation="h",
@@ -627,6 +841,7 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
     left.plotly_chart(style_fig(fig, 80 + 34 * len(reg)), use_container_width=True, key=f"{key}_chart2")
 
     agree = agreement_matrix(table, task)[judge_by].drop(judge_by)
+    agree = agree.drop([k_ for k_ in hide if k_ in agree.index])
     agree = agree.dropna().sort_values()
     fam = {m_.key: m_.family for m_ in metrics_for(task)}
     fig = px.bar(x=agree.values, y=[label(task, k_, biz) for k_ in agree.index], orientation="h",
@@ -645,12 +860,14 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
     right.plotly_chart(style_fig(fig, 80 + 34 * len(reg)), use_container_width=True, key=f"{key}_chart4")
 
     st.subheader("Model ranking table")
-    show = [m.key for m in metrics_for(task)]
+    show = [m.key for m in metrics_for(task) if m.key not in hide]
     t = table.copy()
-    t.insert(0, f"rank: {sel_name}", rank(table, task, select_by))
-    t.insert(1, f"rank: {jud_name}", rank(table, task, judge_by))
+    rank_cols = list(dict.fromkeys([f"rank: {sel_name}", f"rank: {jud_name}"]))
+    t.insert(0, rank_cols[0], rank(table, task, select_by))
+    if len(rank_cols) > 1:
+        t.insert(1, rank_cols[1], rank(table, task, judge_by))
     t = t.sort_values(f"rank: {jud_name}")
-    disp = t[[f"rank: {sel_name}", f"rank: {jud_name}"]].copy()
+    disp = t[rank_cols].copy()
     for k_ in show:
         disp[label(task, k_, biz)] = [fmt(task, k_, v) for v in t[k_]]
     for kc in [c_ for c_ in t.columns if c_.startswith("knob_")]:
@@ -661,6 +878,7 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
 
     with st.expander("Do the metrics agree with each other? (rank correlation across models)"):
         am = agreement_matrix(table, task)
+        am = am.drop(index=[k_ for k_ in hide if k_ in am.index], columns=[k_ for k_ in hide if k_ in am.columns])
         names = [label(task, k_, biz) for k_ in am.columns]
         fig = go.Figure(go.Heatmap(z=am.values, x=names, y=names, zmin=-1, zmax=1,
                                    colorscale=[[0, COL_IDEAL], [0.5, "#e8e7e2"], [1, COL_PICKED]],
@@ -671,7 +889,7 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
 
 with tab_biz:
     render_selection(table, task, pop.y, pop.value, ms.scores, idx, biz, select_by, judge_by,
-                     target, key="sim")
+                     target, key="sim", hide=() if use_usd else tuple(USD_KEYS))
     sel_name, jud_name = label(task, select_by, biz), label(task, judge_by, biz)
     with st.expander("Is this a fluke? Repeat with fresh model draws"):
         reps = st.slider("Replicates", 5, 50, 10, step=5)
@@ -715,6 +933,7 @@ def get_kdd98(path, mtime):
 
 @st.cache_data(max_entries=12, show_spinner="Scoring the real models...")
 def get_real_table(mtime, biz_kw, value_mode, algos):
+    stamp("real", mtime, biz_kw, value_mode, algos)
     y, value, scores, names, configs = get_kdd98(KDD98_PATH, mtime)
     keep = np.flatnonzero(configs.algo.isin(algos).values)
     v = value if value_mode == "actual" else np.full(len(y), KDD98_CONSTANT_GIFT)
@@ -746,7 +965,7 @@ with tab_real:
                                     gain_target=st.session_state.rk_gain / 100,
                                     threshold=st.session_state.rk_thr)
         r1 = st.columns([1.3, 1.3, 0.9, 1, 1, 1])
-        fmt_key = lambda k_: f"{label(CLASSIFICATION, k_, rbiz_preview)}  ·  {metric(CLASSIFICATION, k_).family}"
+        fmt_key = lambda k_: generic_label(CLASSIFICATION, k_)
         r1[0].selectbox("Metric you select models by", ckeys, key="rk_select", format_func=fmt_key)
         r1[1].selectbox("What the business actually values", ckeys, key="rk_judge", format_func=fmt_key)
         r1[2].number_input("Cost per mailing ($)", 0.0, 100.0, step=0.01, key="rk_cost")
@@ -764,8 +983,11 @@ with tab_real:
             st.warning("Pick at least one algorithm.")
         else:
             rbiz = rbiz_preview
-            rtable = get_real_table(mtime, tuple(asdict(rbiz).items()), st.session_state.rk_value,
-                                    tuple(st.session_state.rk_algos))
+            rkey = (mtime, tuple(asdict(rbiz).items()), st.session_state.rk_value,
+                    tuple(st.session_state.rk_algos))
+            rtable = get_real_table(*rkey)
+            st.caption(f"🕒 Metrics computed {stamp_text('real', *rkey)} · model predictions "
+                       f"file from {file_date(KDD98_PATH)}")
             rvalue_used = rvalue if st.session_state.rk_value == "actual" else \
                 np.full(len(ry), KDD98_CONSTANT_GIFT)
             ridx = {n: i for i, n in enumerate(rnames)}
@@ -809,6 +1031,7 @@ def get_target_d(scope, mtime):
 
 @st.cache_data(max_entries=12, show_spinner="Scoring the real gift models...")
 def get_target_d_table(scope, mtime, biz_kw, algos, transforms):
+    stamp("td", scope, mtime, biz_kw, algos, transforms)
     y, scores, names, configs = get_target_d(scope, mtime)
     keep = np.flatnonzero((configs["algo"].isin(algos) & configs["transform"].isin(transforms)).values)
     return evaluate(REGRESSION, y, scores[keep], [names[i] for i in keep],
@@ -840,7 +1063,7 @@ with tab_real_d:
         dbiz = BusinessSpec(cost=st.session_state.td_cost, top_pct=st.session_state.td_top / 100,
                             top_n=int(st.session_state.td_topn),
                             gain_target=st.session_state.td_gain / 100)
-        fmt_key = lambda k_: f"{label(REGRESSION, k_, dbiz)}  ·  {metric(REGRESSION, k_).family}"
+        fmt_key = lambda k_: generic_label(REGRESSION, k_)
         r1 = st.columns([1.3, 1.3, 0.9, 1, 0.9, 1])
         r1[0].selectbox("Metric you select models by", rkeys, key="td_select", format_func=fmt_key)
         r1[1].selectbox("What the business actually values", rkeys, key="td_judge", format_func=fmt_key)
@@ -857,9 +1080,11 @@ with tab_real_d:
         if not st.session_state.td_algos or not st.session_state.td_transforms:
             st.warning("Pick at least one algorithm and one target form.")
         else:
-            dtable = get_target_d_table(scope, mtime, tuple(asdict(dbiz).items()),
-                                        tuple(st.session_state.td_algos),
-                                        tuple(st.session_state.td_transforms))
+            dkey = (scope, mtime, tuple(asdict(dbiz).items()), tuple(st.session_state.td_algos),
+                    tuple(st.session_state.td_transforms))
+            dtable = get_target_d_table(*dkey)
+            st.caption(f"🕒 Metrics computed {stamp_text('td', *dkey)} · model predictions "
+                       f"file from {file_date(target_d_path(scope))}")
             didx = {n: i for i, n in enumerate(dnames)}
             kind = (dtable.knob_algo + " · " + dtable.knob_transform).rename("model type")
             render_selection(dtable, REGRESSION, dy, None, dscores, didx, dbiz,

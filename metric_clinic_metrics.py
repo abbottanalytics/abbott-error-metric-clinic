@@ -60,7 +60,7 @@ CLASSIFICATION_METRICS = [
     Metric("lift_top", "Lift @ top {top}", "top N / top %", True),
     Metric("gain_top", "% of 1s captured @ top {top}", "top N / top %", True),
     Metric("value_top", "% of $ captured @ top {top}", "top N / top %", True),
-    Metric("precision_topn", "Response rate @ top {n}", "top N / top %", True),
+    Metric("precision_topn", "Hit rate (precision) @ top {n}", "top N / top %", True),
     Metric("depth_gain", "Depth to capture {gain} of 1s", "depth to capture", False),
     Metric("profit_top", "Profit acting on top {top}", "business $", True, True),
     Metric("profit_topn", "Profit acting on top {n}", "business $", True, True),

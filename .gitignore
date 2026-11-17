@@ -7,3 +7,6 @@ __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/
 .DS_Store
+
+# Saved dashboard settings (last session, recent, named scenarios)
+data/clinic_state.json

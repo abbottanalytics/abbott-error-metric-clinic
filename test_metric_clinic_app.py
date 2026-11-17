@@ -1,5 +1,6 @@
 """Smoke test: every preset renders without exceptions."""
 import os
+import tempfile
 
 import pytest
 from streamlit.testing.v1 import AppTest
@@ -7,6 +8,9 @@ from streamlit.testing.v1 import AppTest
 from metric_clinic_kdd98 import DEFAULT_OUT as KDD98_PATH
 from metric_clinic_kdd98_target_d import predictions_path as target_d_path
 from metric_clinic_presets import PRESETS
+
+# keep test runs out of the real saved-settings file
+os.environ["METRIC_CLINIC_STATE"] = os.path.join(tempfile.mkdtemp(), "clinic_state.json")
 
 
 @pytest.mark.parametrize("preset", list(PRESETS))
