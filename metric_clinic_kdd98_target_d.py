@@ -35,11 +35,6 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from sklearn.exceptions import ConvergenceWarning
-from sklearn.linear_model import Lasso, Ridge
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.tree import DecisionTreeRegressor
 
 from metric_clinic_kdd98 import KDD_DIR, PREP_ID, PROJECTS, SAMPLE_FRACS, SEEDS, SPLIT_ID
 
@@ -68,6 +63,11 @@ def _configs():
 
 
 def _model(cfg, seed):
+    # scikit-learn is only needed to retrain, so the dashboard runs without it
+    from sklearn.linear_model import Lasso, Ridge
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.tree import DecisionTreeRegressor
     if cfg["algo"] == "tree":
         return DecisionTreeRegressor(max_depth=cfg["max_depth"], min_samples_leaf=cfg["min_leaf"],
                                      random_state=seed)
@@ -77,6 +77,7 @@ def _model(cfg, seed):
 
 
 def build(scope, data_dir, prep_id=PREP_ID, split_id=SPLIT_ID):
+    from sklearn.exceptions import ConvergenceWarning
     sys.path.insert(0, PROJECTS)
     from kddcup1998.run_target_b_metriccorr_experiment import sample_training, select_features
 

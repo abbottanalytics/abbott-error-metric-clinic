@@ -33,9 +33,6 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from sklearn.exceptions import ConvergenceWarning
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECTS = os.path.dirname(HERE)
@@ -50,6 +47,10 @@ SAMPLE_FRACS = [0.50, 0.75, 1.00]
 
 
 def build(data_dir, prep_id=PREP_ID, split_id=SPLIT_ID):
+    # scikit-learn is only needed to retrain, so the dashboard runs without it
+    from sklearn.exceptions import ConvergenceWarning
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.tree import DecisionTreeClassifier
     # the experiment's own helpers, so the grid stays identical to the original;
     # imported here so the dashboard can load saved predictions without kddcup1998
     sys.path.insert(0, PROJECTS)
