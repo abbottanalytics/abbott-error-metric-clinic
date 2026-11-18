@@ -257,7 +257,11 @@ with st.sidebar:
     run_stamp = st.empty()
     memory_box = st.container()
     st.divider()
-    st.caption("Machine Learning Week EU · Dean Abbott, Abbott Analytics")
+    st.caption("Model Selection Clinic by Dean Abbott, Abbott Analytics · first shown at "
+               "Machine Learning Week EU 2026 · "
+               "[github.com/abbottanalytics/abbott-error-metric-clinic]"
+               "(https://github.com/abbottanalytics/abbott-error-metric-clinic) · "
+               "code MIT, docs CC BY 4.0: please credit when you reuse it")
 
 task = st.session_state.pop_task
 frozen = st.session_state.frozen
@@ -601,7 +605,11 @@ with memory_box:
     names = sorted(_mem["saved"])
     if names:
         st.selectbox("Saved", names, key="saved_pick",
-                     format_func=lambda n_: f"{n_} ({saved.when(_mem['saved'][n_])})")
+                     format_func=lambda n_: f"{n_} (" + ("example" if _mem["saved"][n_].get("about")
+                                                         else saved.when(_mem["saved"][n_])) + ")")
+        _about = _mem["saved"].get(st.session_state.get("saved_pick"), {}).get("about")
+        if _about:
+            st.caption(_about)
         b1, b2 = st.columns(2)
         b1.button("Load", on_click=_load_saved, use_container_width=True)
         b2.button("Delete", on_click=_delete_saved, use_container_width=True)

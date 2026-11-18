@@ -1,0 +1,294 @@
+{
+ "fraud counts 1": {
+  "settings": {
+   "pop_task": "classification",
+   "pop_n": 100000,
+   "pop_target": "fraud",
+   "pop_prev": 0.1,
+   "pop_vmean": 400.0,
+   "pop_vcv": 1.2,
+   "pop_shape": "lognormal",
+   "pop_mean": 100.0,
+   "pop_sd": 25.0,
+   "pop_cv": 1.0,
+   "pop_nonzero": 10.0,
+   "m_n": 50,
+   "m_auc": [
+    0.68,
+    0.83
+   ],
+   "m_conc": [
+    0.0,
+    1.0
+   ],
+   "m_tilt": [
+    -0.4,
+    0.4
+   ],
+   "m_calib": [
+    -1.0,
+    1.0
+   ],
+   "m_corr": [
+    0.5,
+    0.7
+   ],
+   "m_het": [
+    0.0,
+    0.0
+   ],
+   "m_shrink": [
+    1.0,
+    1.0
+   ],
+   "m_bias": [
+    0.0,
+    0.0
+   ],
+   "m_strength": [
+    1.0,
+    1.0
+   ],
+   "m_scale": "log",
+   "b_cost": 5.0,
+   "b_cost_cv": 0.0,
+   "b_top": 1.0,
+   "b_topn": 100,
+   "b_gain": 90.0,
+   "b_thr": 0.001,
+   "preset": "Fraud review: catch 90% of fraud",
+   "pop_usd": false,
+   "m_mode": "parametric",
+   "m_palgos": [
+    "logreg",
+    "tree"
+   ],
+   "select_by": "auc",
+   "judge_by": "precision_topn",
+   "pop_seed": 0,
+   "model_seed": 3
+  },
+  "summary": "fraud · 100,000 rows · 0.1% 1s · ROC AUC → Hit rate (precision) @ top 100",
+  "at": "2026-11-18T12:00:00",
+  "about": "Invoice fraud, counts only: 100,000 invoices, 0.1% fraud, investigators can open 100. Dollars are off. Does the best-AUC model put the most frauds in the top 100?"
+ },
+ "fraud net benefit v1": {
+  "settings": {
+   "pop_task": "classification",
+   "pop_n": 100000,
+   "pop_target": "fraud",
+   "pop_prev": 0.1,
+   "pop_vmean": 10000.0,
+   "pop_vcv": 1.2,
+   "pop_shape": "lognormal",
+   "pop_mean": 100.0,
+   "pop_sd": 25.0,
+   "pop_cv": 1.0,
+   "pop_nonzero": 10.0,
+   "m_n": 50,
+   "m_auc": [
+    0.68,
+    0.83
+   ],
+   "m_conc": [
+    0.0,
+    1.0
+   ],
+   "m_tilt": [
+    -0.4,
+    0.4
+   ],
+   "m_calib": [
+    -1.0,
+    1.0
+   ],
+   "m_corr": [
+    0.5,
+    0.7
+   ],
+   "m_het": [
+    0.0,
+    0.0
+   ],
+   "m_shrink": [
+    1.0,
+    1.0
+   ],
+   "m_bias": [
+    0.0,
+    0.0
+   ],
+   "m_strength": [
+    1.0,
+    1.0
+   ],
+   "m_scale": "log",
+   "b_cost": 2000.0,
+   "b_cost_cv": 1.9,
+   "b_top": 1.0,
+   "b_topn": 100,
+   "b_gain": 90.0,
+   "b_thr": 0.001,
+   "preset": "Fraud review: catch 90% of fraud",
+   "pop_usd": true,
+   "m_mode": "parametric",
+   "m_palgos": [
+    "logreg",
+    "tree"
+   ],
+   "select_by": "accuracy",
+   "judge_by": "profit_topn",
+   "pop_seed": 0,
+   "model_seed": 3
+  },
+  "summary": "fraud · 100,000 rows · 0.1% 1s · Accuracy @ p>0.001 → Profit acting on top 100",
+  "at": "2026-11-18T12:00:00",
+  "about": "Invoice fraud with dollars: a recovered fraud is worth about $10,000 (CV 1.2), an investigation costs about $2,000 (CV 1.9), breakeven hit rate 20%. Selected by accuracy, judged by the net benefit of the 100 investigations."
+ },
+ "fraud net benefit v2": {
+  "settings": {
+   "pop_task": "classification",
+   "pop_n": 100000,
+   "pop_target": "fraud",
+   "pop_prev": 0.1,
+   "pop_vmean": 10000.0,
+   "pop_vcv": 1.6,
+   "pop_shape": "lognormal",
+   "pop_mean": 100.0,
+   "pop_sd": 25.0,
+   "pop_cv": 1.0,
+   "pop_nonzero": 10.0,
+   "m_n": 50,
+   "m_auc": [
+    0.68,
+    0.83
+   ],
+   "m_conc": [
+    0.0,
+    1.0
+   ],
+   "m_tilt": [
+    -0.4,
+    0.4
+   ],
+   "m_calib": [
+    -1.0,
+    1.0
+   ],
+   "m_corr": [
+    0.5,
+    0.7
+   ],
+   "m_het": [
+    0.0,
+    0.0
+   ],
+   "m_shrink": [
+    1.0,
+    1.0
+   ],
+   "m_bias": [
+    0.0,
+    0.0
+   ],
+   "m_strength": [
+    1.0,
+    1.0
+   ],
+   "m_scale": "log",
+   "b_cost": 1000.0,
+   "b_cost_cv": 0.8,
+   "b_top": 1.0,
+   "b_topn": 100,
+   "b_gain": 90.0,
+   "b_thr": 0.001,
+   "preset": "Fraud review: catch 90% of fraud",
+   "pop_usd": true,
+   "m_mode": "parametric",
+   "m_palgos": [
+    "logreg",
+    "tree"
+   ],
+   "select_by": "accuracy",
+   "judge_by": "profit_topn",
+   "pop_seed": 0,
+   "model_seed": 3
+  },
+  "summary": "fraud · 100,000 rows · 0.1% 1s · Accuracy @ p>0.001 → Profit acting on top 100",
+  "at": "2026-11-18T12:00:00",
+  "about": "As v1 with a wider benefit spread (CV 1.6) and a cheaper, steadier investigation (about $1,000, CV 0.8): breakeven hit rate 10%."
+ },
+ "CLV best 10000": {
+  "settings": {
+   "pop_task": "regression",
+   "pop_n": 100000,
+   "pop_target": "CLV",
+   "pop_prev": 5.0,
+   "pop_vmean": 15.0,
+   "pop_vcv": 0.8,
+   "pop_shape": "zero_inflated",
+   "pop_mean": 500.0,
+   "pop_sd": 25.0,
+   "pop_cv": 1.5,
+   "pop_nonzero": 10.0,
+   "m_n": 50,
+   "m_auc": [
+    0.6,
+    0.7
+   ],
+   "m_conc": [
+    0.0,
+    0.0
+   ],
+   "m_tilt": [
+    0.0,
+    0.0
+   ],
+   "m_calib": [
+    0.0,
+    0.0
+   ],
+   "m_corr": [
+    0.55,
+    0.65
+   ],
+   "m_het": [
+    -0.9,
+    0.9
+   ],
+   "m_shrink": [
+    0.5,
+    1.5
+   ],
+   "m_bias": [
+    -0.3,
+    0.3
+   ],
+   "m_strength": [
+    1.0,
+    1.0
+   ],
+   "m_scale": "raw",
+   "b_cost": 0.0,
+   "b_cost_cv": 0.0,
+   "b_top": 5.0,
+   "b_topn": 10000,
+   "b_gain": 80.0,
+   "b_thr": 0.5,
+   "preset": "Customer lifetime value (regression)",
+   "pop_usd": true,
+   "m_mode": "parametric",
+   "m_palgos": [
+    "linear",
+    "tree"
+   ],
+   "select_by": "rmse",
+   "judge_by": "profit_topn",
+   "pop_seed": 0,
+   "model_seed": 9
+  },
+  "summary": "CLV · 100,000 rows · RMSE → Profit acting on top 10,000",
+  "at": "2026-11-18T12:00:00",
+  "about": "Email / CLV regression: mostly-zero spend, no cost per email, models built on raw dollars. RMSE vs the value captured in the top 10,000 customers."
+ }
+}

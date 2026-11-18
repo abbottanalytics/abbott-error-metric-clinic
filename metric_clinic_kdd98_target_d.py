@@ -17,6 +17,11 @@ feature count, tree depth/leaf size, and the training sample.
 
 Writes data/kdd98_target_d_<scope>.npz (y, scores, names, configs) and
 data/kdd98_target_d_<scope>_profiles.npz.
+
+You don't need to run this: the resulting files ship in data/. Retraining the models
+needs the author's KDD Cup 98 data-preparation project (kddcup1998, not public), so
+on a standalone copy only --profiles-only works, which rebuilds the profile banks
+from the saved predictions.
 """
 
 from __future__ import annotations

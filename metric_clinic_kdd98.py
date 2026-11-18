@@ -15,6 +15,11 @@ Output (.npz):
     scores   float32 (n_models, n_records) predicted probabilities
     names    model ids
     configs  JSON list of each model's configuration
+
+You don't need to run this: the resulting files ship in data/. Retraining the models
+needs the author's KDD Cup 98 data-preparation project (kddcup1998, not public), so
+on a standalone copy only --profiles-only works, which rebuilds the profile banks
+from the saved predictions.
 """
 
 from __future__ import annotations

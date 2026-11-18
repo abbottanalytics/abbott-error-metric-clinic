@@ -1,121 +1,147 @@
 # Model Selection Clinic: are you optimizing the right metric?
 
-This is the live simulator for the Machine Learning Week EU clinic. You turn an audience
-member's problem into a simulated population and a set of candidate models. The
-dashboard then shows which model each metric would pick and what the wrong pick costs.
+An interactive simulator that shows **what it costs to pick a model by the wrong error metric**.
+
+Data scientists build dozens of candidate models and deploy the one that scores best on a metric
+such as AUC, accuracy, F1 or RMSE. The business, though, is paid for something else: profit from
+the people it contacts, frauds caught by the 100 investigations it can afford, value in the top
+of the list. This dashboard simulates a population and a set of candidate models that look like
+*your* problem. For every metric it shows which model that metric would pick and how much business
+value that pick leaves on the table: the **opportunity cost** of the metric.
+
+It also runs the same comparison on **480 real models** built on the KDD Cup 1998 fundraising
+data. With actual gift amounts, AUC and profit rank those models in nearly opposite order
+(ρ ≈ −0.22). Give every donor the same $14.50 gift and they agree (ρ ≈ 0.96): it's the dollars,
+not the models, that break AUC as a selector.
+
+Created by **Dean Abbott, Abbott Analytics**, for the *Model Selection Clinic* at Machine Learning
+Week EU 2026.
+
+## Quick start
+
+Python 3.10–3.12.
 
 ```bash
-pip install streamlit plotly numpy pandas scipy
+git clone https://github.com/abbottanalytics/abbott-error-metric-clinic.git
+cd abbott-error-metric-clinic
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 streamlit run metric_clinic_app.py
+```
+
+The dashboard opens at http://localhost:8501. No other data or accounts are needed: the real
+KDD Cup 98 model results ship in `data/`.
+
+No git? Use **Code → Download ZIP** on GitHub, unzip, and run the same commands from the
+unzipped folder.
+
+## How to use it
+
+1. **① Population.** Pick the closest **scenario preset** in the sidebar, then edit the records
+   to match your problem: classification or regression, base rate or target shape. When it looks
+   right, turn on **Freeze population**.
+2. **② Model behavior.** Set the ranges the candidate models are drawn from: ranking strength,
+   concentration at the top, value tilt, calibration (or borrow real KDD Cup 98 model shapes).
+3. **③ Business success.** Enter the **Economics** (what a 1 is worth, what acting costs, the
+   capacity), the metric you select models by today, and what the business actually values. The
+   headline gives the opportunity cost; the charts show the cost of selecting by *every* metric.
+   **Is this a fluke?** reruns with fresh model draws.
+4. **④ / ⑤ Real data.** The same comparison on 480 real response models and 480 real gift-amount
+   models.
+
+**[DOCUMENTATION.md](DOCUMENTATION.md)** describes every control, chart and table, and why
+each one matters.
+
+The sidebar's **Saved** list starts with four worked examples from the clinic: invoice fraud
+with 100 investigations a month (counted, then with variable dollar benefit and cost) and an
+email/CLV regression with no contact cost. Your own saved
+and recent scenarios are kept in `data/clinic_state.json` on your machine.
+
+## Use it on your own models
+
+`evaluate()` only needs arrays, so you can run the same comparison on your own predictions
+without the simulator:
+
+```python
+import numpy as np
+from metric_clinic_metrics import BusinessSpec, evaluate, choose, regret_by_metric
+
+# y: actuals (0/1 or numbers); scores: one row per model; value: $ per record (optional)
+table = evaluate("classification", y, scores, model_names,
+                 BusinessSpec(cost=0.68, top_pct=0.10, top_n=1000), value=gift_amounts)
+print(choose(table, "classification", "auc", "profit_max"))      # pick vs best, and the gap
+print(regret_by_metric(table, "classification", "profit_max"))   # the cost of every metric
 ```
 
 ## Files
 
 | File | What it does |
 |---|---|
+| `metric_clinic_app.py` | The Streamlit dashboard |
 | `metric_clinic_sim.py` | `make_population(PopulationSpec)` and `make_models(population, ModelSpec)` |
-| `metric_clinic_metrics.py` | `evaluate(...)` gives one row per model with every metric. Also `choose`, `regret_by_metric`, and the curves |
-| `metric_clinic_kdd98.py` | Reruns the 480-model TARGET_B grid from `kddcup1998/run_target_b_metriccorr_experiment.py` and saves each model's score on each held-out donor, plus the actual gift, to `data/kdd98_predictions.npz` |
-| `metric_clinic_kdd98_target_d.py` | Two 480-model TARGET_D grids (responders only / all records) with saved predictions and profile banks |
-| `metric_clinic_profiles.py` | Empirical model profiles: extract from real predictions, simulate from them (classification and regression) |
-| `metric_clinic_presets.py` | The eight starting scenarios (three borrow real KDD Cup 98 model shapes). Edit them or add your own |
-| `metric_clinic_app.py` | The Streamlit dashboard: three simulation tabs that follow the conversation, plus the real KDD Cup 98 tab |
-| `test_metric_clinic_*.py` | Checks that each knob does what it claims, plus a render test for every preset |
+| `metric_clinic_metrics.py` | `evaluate(...)`: one row per model with every metric; also `choose`, `regret_by_metric`, curves |
+| `metric_clinic_profiles.py` | Empirical model profiles: extract them from real predictions and simulate from them |
+| `metric_clinic_presets.py` | The eight scenario presets. Edit them or add your own |
+| `metric_clinic_saved.py` | Last session, recent and saved scenarios |
+| `example_scenarios.json` | The worked examples loaded into **Saved** on first run |
+| `metric_clinic_kdd98.py`, `metric_clinic_kdd98_target_d.py` | How the real-model files in `data/` were built (see below) |
+| `data/*.npz` | Predictions of 480 TARGET_B and 2 × 480 TARGET_D models on held-out KDD Cup 98 records, plus their profile banks |
+| `test_metric_clinic_*.py` | Tests: each knob does what it claims, round-trip of real profiles, a render test for every preset |
 
-`evaluate()` only needs arrays (actuals, a score matrix, optionally a $ value per record).
-To use it on real predictions, pass in your own `y` and model scores. You don't need the simulator.
+Run the tests with `pip install pytest` and then `python -m pytest`.
 
-## The real response example (tab ④)
+## How the simulation works
 
-Generate the predictions once (takes a few minutes; needs the kddcup1998 prepared data):
+- **Population.** Classification: 1s at your base rate, each with a lognormal $ benefit (mean
+  and spread you choose). Regression: a normal, lognormal or zero-inflated target.
+- **Candidate models.** Each model draws its behavior at random from the ranges on ②. Each knob
+  moves one family of metrics and holds another roughly fixed. That separation is what makes the
+  rankings reverse:
 
-```bash
-python3 metric_clinic_kdd98.py
-```
+  | Knob | Moves | Leaves alone |
+  |---|---|---|
+  | AUC / correlation | everything | – |
+  | Concentration at the top | lift at top %, depth to capture | AUC |
+  | Value tilt | profit, % of $ captured | AUC, lift |
+  | Calibration bias | accuracy, precision, recall, F1, log loss, threshold-rule profit | AUC, lift, profit at a fixed depth |
+  | Where errors fall (regression) | top-decile value and profit | RMSE |
+  | Spread, bias (regression) | RMSE, R², MAE, threshold-rule profit | ranking, top-% profit |
 
-The tab runs the same comparison on 480 real models (120 logistic regressions and 360
-decision trees) scored on the same 47,706 held-out donors. You can value a responder at
-their **actual gift (TARGET_D)** or at the original experiment's **constant $14.50**.
-Switching between the two shows how much model ranking depends on how you value a response.
+- **Real shapes.** In "borrowed" mode each candidate takes the decile-by-decile shape of one real
+  KDD Cup 98 model: which score ventiles its responders land in, which gift sizes it finds, and
+  its calibration. Real models make trade-offs nobody designed.
+- **Fair comparisons.** Every model faces the same per-record costs. Tied scores are broken by a
+  fixed random permutation. Results that differ only by floating-point noise count as ties. Each
+  preset's model seed is the median of 20 draws, so the opening example isn't cherry-picked.
 
-## The real gift-amount example (tab ⑤)
+## The real-model data
 
-The same comparison for 480 real TARGET_D regression models, in two scopes:
-- **Every record (mostly zeros):** mail anyone whose predicted gift beats $0.68. Every model's
-  R² is near 0, but profit runs from $0 to about $7.4k. Selecting by MAE picks a model that mails
-  no one, because MAE rewards predicting the median gift, which is $0. |Mean error| tracks this
-  decision best (ρ ≈ 0.84), since the rule depends on the level of the predictions.
-- **Donors only (gift amount):** illustrative use is a $10 upgrade ask to the top 20%.
+`data/` holds model *scores* and the held-out targets (TARGET_B, TARGET_D) for 47,706 records of
+the KDD Cup 1998 learning set (Paralyzed Veterans of America donor data, from the
+[UCI KDD Archive](https://kdd.ics.uci.edu/databases/kddcup98/kddcup98.html)). No donor input fields
+are included.
+- Response models: 120 logistic regressions and 360 decision trees.
+- Gift-amount models: ridge, lasso and regression trees, each fit on raw dollars or on
+  log(1 + $), in two scopes (all records, donors only).
 
-Model types (linear/tree × raw/log target) get their own marker on the scatter.
+`metric_clinic_kdd98.py` and `metric_clinic_kdd98_target_d.py` document how they were built.
+Retraining needs the author's data-preparation project, which isn't public. You don't need to
+retrain to use anything in the dashboard. `--profiles-only` rebuilds the profile banks from the
+shipped predictions.
 
-## Real model shapes in the simulator
+## License and credit
 
-Parametric knobs only produce the asymmetries someone designed. On the Models tab, choose
-**"Borrowed from real KDD Cup 98 models"** (or the *Fundraising with real KDD Cup 98 model
-shapes* preset) and each candidate gets the decile-by-decile shape of one real model.
-`metric_clinic_profiles.py` stores each model as a profile:
-- a 10×20 table: for each gift-size bucket, the share of responders that land in each score
-  ventile. It holds both the lift curve and *which* donors the model finds.
-- the model's own calibration in each ventile.
+- **Code:** MIT License (see [LICENSE](LICENSE)).
+- **Documentation and content** (this README, DOCUMENTATION.md, the scenario designs and the
+  simulation design they describe): [CC BY 4.0](LICENSE-docs.md). Reuse and adapt freely, with
+  credit.
 
-Regression presets can borrow real shapes too. `metric_clinic_kdd98_target_d.py` trains two
-480-model TARGET_D grids on the same split:
-- **responders**: gift amount among donors; used for skewed targets such as CLV.
-- **all records**: TARGET_D for everyone, about 95% zeros; used for zero-inflated targets.
+If you use the simulator, its scenarios or its findings in a talk, course, paper or product,
+please credit:
 
-The grids vary ridge, lasso and trees, raw vs log1p target (log-model predictions are capped at
-the training range), feature count, depth/leaf size, and the training sample. A regression
-profile maps each bucket of the *actual* value to prediction ventiles. It also stores each
-ventile's prediction level, so bias and shrinkage carry over. When a target has many zeros,
-the zeros get a bucket of their own.
+> Model Selection Clinic simulator by Dean Abbott, Abbott Analytics,
+> https://github.com/abbottanalytics/abbott-error-metric-clinic
 
-```bash
-python3 metric_clinic_kdd98_target_d.py      # about 3 minutes, both grids + profiles
-```
-
-Simulating from a profile reproduces both in any population (the round-trip test checks this).
-A strength control flattens the shape (<1) or sharpens it (>1). To add another dataset, call
-`extract_profiles(y, value, scores, names)` and save the result with `save_bank`.
-
-## Metric families
-
-| Family | Metrics |
-|---|---|
-| Statistical (all records) | AUC, accuracy, precision, recall, F1 at a threshold, log loss, Brier (R², RMSE, MAE, bias for regression) |
-| Top-focused statistical | partial AUC (FPR ≤ 10%); Spearman for regression |
-| Top N / top % | lift, % of 1s captured, % of $ captured at top %; response rate at top N records |
-| Depth to capture | depth needed to reach X% of the 1s (or of the value) |
-| Business $ (fixed cost, variable gain) | profit at top %, profit at top N, ROI at top %, max profit over depth, profit from a threshold rule |
-
-Tied scores, common with trees, are broken by a fixed random permutation, so a
-dataset's row order can never influence a top-N result. AUC gives tied scores
-their average rank, which matches sklearn.
-
-## The model knobs
-
-Each knob moves one family of metrics and holds another roughly fixed. That separation
-is what makes rankings reverse.
-
-| Knob | Moves | Leaves alone |
-|---|---|---|
-| **Classification** | | |
-| AUC | everything | – |
-| Concentration at the top | lift at top %, depth to capture 90% | AUC |
-| Value tilt | profit | AUC, lift |
-| Calibration bias | accuracy, precision, recall, F1, log loss, threshold-rule profit | AUC, lift, gains, profit at fixed depth |
-| **Regression** (applied on the log scale for skewed targets) | | |
-| Correlation | everything | – |
-| Where errors fall | top-decile value and profit | RMSE |
-| Spread (1 = calibrated) | RMSE, R², threshold-rule profit | ranking, top-% profit |
-| Bias | RMSE, MAE, threshold-rule profit | ranking, top-% profit |
-
-## Running the clinic
-
-1. **Population tab.** Pick the closest preset, then edit the population to fit the audience member's case. When they agree it looks right, turn on **Freeze population**.
-2. **Model tab.** Set the ranges for how the candidate models behave. Collapse a range to a single value to turn that behavior off and see whether the reversal goes away.
-3. **Business tab.** Set the **Economics** (benefit per 1, cost per record, each with a spread; the breakeven hit rate is cost ÷ benefit). Then choose the metric they select models by now, and what the business actually values. Only the capacity/threshold settings those two metrics use are shown; the rest are in the comparison-settings panel. The headline shows the opportunity cost. The bar chart shows the cost of selecting by every other metric.
-4. **"Is this a fluke?"** Rerun with fresh model draws. It reports how often the statistical pick was also the business winner, and the typical shortfall.
-
-Each preset's model seed is the draw whose opportunity cost is at the median of 20 draws,
-so the opening example is typical rather than cherry-picked.
+GitHub's **Cite this repository** button (from [CITATION.cff](CITATION.cff)) gives a formatted
+citation.

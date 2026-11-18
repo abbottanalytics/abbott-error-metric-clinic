@@ -1,12 +1,13 @@
-# Generated predictions and profile banks: rebuild with
-#   python3 metric_clinic_kdd98.py
-#   python3 metric_clinic_kdd98_target_d.py
-data/*.npz
-
 __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/
 .DS_Store
+.venv/
 
-# Saved dashboard settings (last session, recent, named scenarios)
+# Your own saved dashboard settings (last session, recent, named scenarios).
+# New users start from example_scenarios.json instead.
 data/clinic_state.json
+data/clinic_state.json.tmp
+
+# Talk notes kept local only
+TALK_WALKTHROUGH.md

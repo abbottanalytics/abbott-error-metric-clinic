@@ -1,6 +1,9 @@
 """Remember dashboard settings between runs: the last session, recent scenarios and
 named saves, all in one small JSON file (data/clinic_state.json by default; set
-METRIC_CLINIC_STATE to use another file, as the tests do)."""
+METRIC_CLINIC_STATE to use another file, as the tests do).
+
+The first time the app runs (no state file yet), the named saves are seeded from
+example_scenarios.json, so new users have worked examples to load."""
 
 from __future__ import annotations
 
@@ -10,17 +13,29 @@ from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_RECENT = 10
+EXAMPLES = os.path.join(HERE, "example_scenarios.json")
 
 
 def state_path() -> str:
     return os.environ.get("METRIC_CLINIC_STATE", os.path.join(HERE, "data", "clinic_state.json"))
 
 
+def examples() -> dict:
+    """Name -> {settings, summary, at, about} for the bundled example scenarios."""
+    try:
+        with open(EXAMPLES) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def read() -> dict:
     try:
         with open(state_path()) as f:
             d = json.load(f)
-    except (OSError, ValueError):
+    except OSError:                      # first run: start with the examples
+        d = {"saved": examples()}
+    except ValueError:
         d = {}
     d.setdefault("last", None)
     d.setdefault("recent", [])

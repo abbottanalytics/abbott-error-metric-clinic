@@ -44,3 +44,28 @@ def test_target_d_tab_renders_both_scopes():
     assert at.session_state.td_judge == "profit_top"
     at.multiselect(key="td_transforms").set_value(["raw"]).run()
     assert not at.exception, at.exception
+
+
+import metric_clinic_saved as saved  # noqa: E402
+
+
+@pytest.mark.parametrize("name", list(saved.examples()))
+def test_example_scenario_loads_on_first_run(name, monkeypatch, tmp_path):
+    # a brand-new user: no state file yet, so Saved starts with the bundled examples
+    monkeypatch.setenv("METRIC_CLINIC_STATE", str(tmp_path / "clinic_state.json"))
+    at = AppTest.from_file("metric_clinic_app.py", default_timeout=300)
+    at.run()
+    assert not at.exception, at.exception
+    assert f"{name} (example)" in at.selectbox(key="saved_pick").options
+    at.selectbox(key="saved_pick").set_value(name).run()
+    at.button[[b.label for b in at.button].index("Load")].click().run()
+    assert not at.exception, at.exception
+    want = saved.examples()[name]["settings"]
+    assert at.session_state.select_by == want["select_by"]
+    assert at.session_state.judge_by == want["judge_by"]
+
+
+def test_examples_cover_both_problem_types():
+    ex = saved.examples()
+    assert len(ex) >= 4
+    assert {e["settings"]["pop_task"] for e in ex.values()} == {"classification", "regression"}
