@@ -141,7 +141,7 @@ if "preset" not in st.session_state:
 
 # Streamlit drops a widget's value on any run where the widget isn't drawn (e.g. the
 # $ inputs while "Dollars matter" is off). Re-assigning keeps every input alive.
-for _k in [*POP_KEYS.values(), *MODEL_KEYS.values(), *BIZ_KEYS.values()]:
+for _k in [*POP_KEYS.values(), *MODEL_KEYS.values(), *BIZ_KEYS.values(), *EXTRA_KEYS]:
     if _k in st.session_state:
         st.session_state[_k] = st.session_state[_k]
 
@@ -798,6 +798,11 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
                  f"{rel:.0%} of what was available" if jud_m.money and np.isfinite(rel) else
                  f"rank agreement across models ρ = {c['rank_corr']:.2f}"),
                 delta_color="inverse" if gap > 0 else "off")
+    if table[judge_by].nunique() == 1:
+        st.info(f"Every model ties on {jud_name}, so the choice of model can't matter here."
+                + (" Each one's best depth is acting on everyone: nearly every record is worth more "
+                   "than the cost. Raise the cost, make most targets $0 (zero-inflated), or judge by "
+                   "a top-X% metric." if judge_by == "profit_max" else ""))
     if judge_by == "profit_max" and "best_n" in table:
         st.caption(f"No capacity limit: each model acts down its list until net benefit peaks. "
                    f"{picked} would act on **{int(table.at[picked, 'best_n']):,}** records; "
@@ -886,20 +891,24 @@ def render_selection(table, task, y, value, scores, idx, biz, select_by, judge_b
     agree = agree.drop([k_ for k_ in hide if k_ in agree.index])
     agree = agree.dropna().sort_values()
     fam = {m_.key: m_.family for m_ in metrics_for(task)}
-    fig = px.bar(x=agree.values, y=[label(task, k_, biz) for k_ in agree.index], orientation="h",
-                 color=[fam[k_] for k_ in agree.index],
-                 color_discrete_sequence=["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4"],
-                 category_orders={"color": FAMILIES},
-                 labels={"x": f"Spearman ρ between model ranks", "y": "", "color": ""},
-                 title=f"Spearman ρ vs {jud_name}")
-    fig.update_traces(marker_line_width=2, marker_line_color="white",
-                      texttemplate="%{x:.2f}", textposition="outside", cliponaxis=False)
-    fig.update_xaxes(range=[min(-0.3, agree.min() - 0.35), 1.2], zeroline=True,
-                     zerolinecolor=COL_OTHER)
-    fig.update_yaxes(categoryorder="array",
-                     categoryarray=[label(task, k_, biz) for k_ in agree.index])
-    fig.update_layout(legend=dict(orientation="h", y=-0.12))
-    right.plotly_chart(style_fig(fig, 80 + 34 * len(reg)), use_container_width=True, key=f"{key}_chart4")
+    if agree.empty:   # every model ties on the judge metric, so no rank correlation exists
+        right.info(f"No rank correlations to show: every model ties on {jud_name}.")
+    else:
+        fig = px.bar(x=agree.values, y=[label(task, k_, biz) for k_ in agree.index],
+                     orientation="h", color=[fam[k_] for k_ in agree.index],
+                     color_discrete_sequence=["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4"],
+                     category_orders={"color": FAMILIES},
+                     labels={"x": f"Spearman ρ between model ranks", "y": "", "color": ""},
+                     title=f"Spearman ρ vs {jud_name}")
+        fig.update_traces(marker_line_width=2, marker_line_color="white",
+                          texttemplate="%{x:.2f}", textposition="outside", cliponaxis=False)
+        fig.update_xaxes(range=[min(-0.3, agree.min() - 0.35), 1.2], zeroline=True,
+                         zerolinecolor=COL_OTHER)
+        fig.update_yaxes(categoryorder="array",
+                         categoryarray=[label(task, k_, biz) for k_ in agree.index])
+        fig.update_layout(legend=dict(orientation="h", y=-0.12))
+        right.plotly_chart(style_fig(fig, 80 + 34 * len(reg)), use_container_width=True,
+                           key=f"{key}_chart4")
 
     st.subheader("Model ranking table")
     show = [m.key for m in metrics_for(task) if m.key not in hide]

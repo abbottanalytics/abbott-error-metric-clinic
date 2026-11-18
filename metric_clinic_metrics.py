@@ -226,6 +226,21 @@ def _regression_row(y, y_rank, pred, biz, cost):
     }
 
 
+def settle_ties(table: pd.DataFrame, digits: int = 10) -> pd.DataFrame:
+    """Round each column to `digits` significant figures of its largest value, so
+    floating-point noise (the same sum added in a different order) can't split true
+    ties into ranks 1..50. E.g. every model's max profit is "mail everyone"."""
+    out = table.copy()
+    for c in out.columns:
+        col = out[c]
+        if not pd.api.types.is_float_dtype(col):
+            continue
+        top = np.nanmax(np.abs(col.to_numpy())) if col.notna().any() else 0.0
+        if top > 0 and np.isfinite(top):
+            out[c] = col.round(int(digits - 1 - np.floor(np.log10(top))))
+    return out
+
+
 def evaluate(task, y, scores, names, biz: BusinessSpec, value=None, params=None) -> pd.DataFrame:
     """One row per model: knob values (if given) then every metric."""
     rows = []
@@ -244,7 +259,7 @@ def evaluate(task, y, scores, names, biz: BusinessSpec, value=None, params=None)
         cost = record_costs(biz, len(y))
         for s in scores:
             rows.append(_regression_row(y, y_rank, s, biz, cost))
-    table = pd.DataFrame(rows, index=pd.Index(names, name="model"))
+    table = settle_ties(pd.DataFrame(rows, index=pd.Index(names, name="model")))
     if params is not None:
         table = pd.concat([pd.DataFrame(params, index=table.index).add_prefix("knob_"), table], axis=1)
     return table
